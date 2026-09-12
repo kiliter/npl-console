@@ -129,6 +129,9 @@ jobs:
       with:
         distribution: temurin
         java-version: '17'
+    # 显式安装命令行工具，避免 runner 未将 sdkmanager 加入 PATH。
+    - name: 配置 Android 命令行工具
+      uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
     - name: 安装 Android SDK
       shell: bash
       run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0'
