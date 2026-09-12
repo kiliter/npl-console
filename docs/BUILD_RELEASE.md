@@ -1,49 +1,45 @@
-# 正式包构建与签名
+# 正式包自动发布
 
-所有发布命令使用 `--release -t lib/main.dart`。禁止把 `tool/keychain_probe.dart`、模拟器包或 Debug 包作为正式发布附件。
+四端统一使用固定 Flutter 3.44.7、`--release -t lib/main.dart`，源码取对应版本标签。工作流见 `.github/workflows/release.yml`。
 
-## Android
+## 创建新版本
 
-生成长期使用的发布 JKS，保存在仓库外或被忽略的 `.release-signing/`。将以下字段写入被忽略的 `android/key.properties`，不要提交真实内容：`storeFile`（绝对路径）、`storePassword`、`keyAlias`、`keyPassword`。Gradle 已配置独立 Release 签名，不回退到 Debug 签名。
-
-```bash
-flutter build apk --release -t lib/main.dart
-```
-
-发布 APK 位于 `build/app/outputs/flutter-apk/app-release.apk`。请在安全位置备份发布 JKS 和密码，后续升级必须沿用。发布签名改变后，旧 Debug 签名安装无法覆盖升级。
-
-## macOS
+先提交并推送代码，再创建版本标签：
 
 ```bash
-flutter build macos --release -t lib/main.dart
-codesign --verify --deep --strict 'build/macos/Build/Products/Release/NPL Maintenance.app'
+git tag -a v1.0.1 -m "发布 v1.0.1"
+git push origin v1.0.1
 ```
 
-当前工程固定包标识 `cn.agilestar.nplMaintenance`，使用本机 Apple Development 签名。新环境需在 Xcode 选择自己的团队。没有对应证书时，可通过 Xcode 的 `CODE_SIGNING_ALLOWED=NO` 构建并明确标注未签名，不能假装已公证。
+推送 `v*` 标签自动触发；正式版本格式为 `v数字.数字.数字`。macOS 执行静态检查、全量 Flutter 测试；四端构建全部成功后汇集附件并发布 Release。失败时不发布不完整的新版本。
 
-把 `.app` 和指向 `/Applications` 的快捷方式放入临时目录，用 `hdiutil create -srcfolder` 制作 DMG。开发签名不等于 Developer ID 分发与 Apple 公证，本次没有公证。
-
-## iOS 真机
+已有标签可手动补发，无需移动标签：
 
 ```bash
-flutter build ios --release --no-codesign -t lib/main.dart
-mkdir -p dist/ios-stage/Payload
-cp -R build/ios/iphoneos/Runner.app dist/ios-stage/Payload/
-(cd dist/ios-stage && zip -qry ../NPL-Console-v1.0.0-ios-unsigned.ipa Payload)
+gh workflow run release.yml --ref main -f tag=v1.0.0
 ```
 
-未签名 IPA 不能直接安装到 iPhone。用户需用有效开发者证书、App ID 和设备描述文件重签名；自行生成自签名证书不能替代 Apple 的签名体系。本次提供真机 arm64 Release IPA，不提供模拟器包。
+手动补发使用 main 的工作流定义，但业务源码仍取指定标签。相同标签附件会覆盖，请仅在修复构建流程后使用。
 
-## Windows
+## 签名配置
 
-在 Windows 上执行 `flutter build windows --release -t lib/main.dart`。完整打包 `build/windows/x64/runner/Release/`，必须保留 DLL 和 data 目录。
+Android 使用同一长期发布密钥，以下仓库 Actions Secrets 必须齐全，缺少时构建失败，不回退 Debug：
 
-仓库工作流使用固定 Flutter 版本构建，通过 Windows SDK 的 `signtool` 为主程序添加构建机生成的自签名。随包仅附公钥证书，不附私钥；Windows 不会默认信任该证书。它不是付费受信代码签名证书，也不会消除 SmartScreen 提示。
+- `ANDROID_KEYSTORE_BASE64`：发布 JKS 的 Base64。
+- `ANDROID_KEYSTORE_PASSWORD`：密钥库密码。
+- `ANDROID_KEY_ALIAS`：密钥别名。
+- `ANDROID_KEY_PASSWORD`：私钥密码。
 
-## 发布检查
+密钥仅在 runner 临时目录还原，不进入 Git 或发布附件。本地 `.release-signing/` 与 `android/key.properties` 已忽略，请安全备份，后续更新沿用同一密钥。
 
-1. 运行 `flutter analyze` 和 `flutter test`，修复失败后再构建。
-2. 四端正式包必须全部构建成功；核对架构和签名状态。
-3. 将源码提交到指定仓库，确保 Windows 工作流构建相同提交。
-4. Release 先建草稿，上传各包、说明与 `SHA256SUMS.txt` 后发布。
-5. 不提交 `.release-signing/`、`android/key.properties`、本机配置、构建目录或真实业务凭据。
+macOS 使用 ad-hoc 签名并保留沙盒权限，提供 Universal DMG；没有 Developer ID 或 Apple 公证，其他 Mac 可能阻止直接打开。
+
+Windows 在 runner 生成自签名证书签署主程序，ZIP 仅附公钥证书。完整解压后运行 EXE，系统不会默认信任该证书，可能显示 SmartScreen。
+
+iOS 提供真机 arm64 未签名 Release IPA，需有效 Apple 开发者证书和描述文件重签名后安装，自生成证书不能替代 Apple 签名。
+
+## 产物与验证
+
+发布 APK、DMG、Windows ZIP、未签名 IPA 四份安装包。不发布 Debug、模拟器包或 AAB。
+
+全量测试在 macOS 正式构建后执行，以确保 PDFium 原生库可用。附件仅在 GitHub runner 汇集上传，临时 Actions artifact 保留 1 天；不下载到维护者电脑，不生成额外哈希文件。Release 附件正常保留。

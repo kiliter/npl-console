@@ -11,6 +11,8 @@
 - PDF 连续渲染、缩略图和缩放；文本、图片与 PDF 应用内全屏。
 - JSON/XML 递归解析专注、折叠和关键字/Key 搜索；签字和图片连续画廊。
 - 系统安全存储业务密钥，文件下载，实际接口请求/响应记录。
-- Windows 自签名便携 ZIP、macOS 开发签名 DMG、Android 发布签名 APK、iOS 未签名真机 IPA。
+- Windows 自签名便携 ZIP、macOS ad-hoc 签名 DMG、Android 发布签名 APK、iOS 未签名真机 IPA。
 
 签名限制与安装步骤见 README；Release 构建不代表 App Store 上架或系统默认信任。
+
+- 四端统一由 GitHub Actions 构建；推送版本标签后自动测试、构建并发布完整 Release。

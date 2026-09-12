@@ -9,11 +9,11 @@
 | 平台 | 文件 | 签名及安装 |
 | --- | --- | --- |
 | Windows x64 | `windows-x64-selfsigned.zip` | 完整解压后运行 `npl_maintenance.exe`；构建机生成自签名，非系统信任证书，可能出现 SmartScreen 提示。附带公钥证书仅供核对，无需导入系统信任根。 |
-| macOS Apple Silicon / Intel | `macos-universal.dmg` | 打开后拖入应用程序；使用本机 Apple Development 签名，未做 Developer ID 公证，其他 Mac 可能提示无法验证开发者。 |
+| macOS Apple Silicon / Intel | `macos-universal.dmg` | 打开后拖入应用程序；使用 CI ad-hoc 签名，未做 Developer ID 签名或 Apple 公证，其他 Mac 可能提示无法验证开发者。 |
 | Android | `android-release.apk` | 使用独立 RSA 发布密钥签名，可侧载安装；支持 arm64、armv7 和 x86_64。旧版使用 Debug 签名，不能直接覆盖，卸载前请确认可重新导入业务密钥。 |
 | iOS 真机 | `ios-unsigned.ipa` | 真机 Release 构建，未签名；需使用自己的 Apple 开发者证书和设备描述文件重新签名后安装，不是模拟器包，也不能直接安装。 |
 
-所有文件的 SHA-256 校验值见 Release 附件 `SHA256SUMS.txt`。安装包不内置业务私钥、密码、服务地址或查询数据。具体系统最低版本以构建产物和平台配置为准。
+四端安装包均由 GitHub Actions 构建并上传，无需在本机下载产物进行哈希校验。安装包不内置业务私钥、密码、服务地址或查询数据。具体系统最低版本以构建产物和平台配置为准。
 
 ## 首次使用
 
@@ -74,7 +74,7 @@ flutter test
 
 PDF 原生控件测试在 macOS 默认读取 `build/native_assets/macos/libpdfium.dylib`，其他环境通过 `PDFIUM_PATH` 指定本机对应动态库。测试夹具的 `sample.jks` 是独立生成的测试密钥，密码公开仅为测试用途，严禁用于业务环境。
 
-四端构建和签名步骤见 [发布构建说明](docs/BUILD_RELEASE.md)。Windows 自动化见 [Windows Release 工作流](.github/workflows/windows-release.yml)。
+四端构建和签名步骤见 [发布构建说明](docs/BUILD_RELEASE.md)。推送 `v*` 版本标签自动触发[四端正式发布工作流](.github/workflows/release.yml)，全量测试和四端构建全部成功后自动发布。
 
 ## 目录
 

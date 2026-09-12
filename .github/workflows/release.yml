@@ -1,0 +1,259 @@
+---
+name: 四端正式发布
+'on':
+  push:
+    tags:
+    - v*
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 已存在版本标签，例如 v1.0.0
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: "${{ steps.version.outputs.tag }}"
+      version: "${{ steps.version.outputs.version }}"
+      sha: "${{ steps.version.outputs.sha }}"
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        fetch-depth: 0
+    - name: 校验版本标签
+      shell: bash
+      run: |-
+        [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '版本标签格式错误'; exit 1; }
+        SHA=$(git rev-parse "refs/tags/$TAG^{commit}")
+        echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+        echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+        echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+      id: version
+      env:
+        TAG: "${{ inputs.tag || github.ref_name }}"
+  macos:
+    needs: version
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      TAG: "${{ needs.version.outputs.tag }}"
+      VERSION: "${{ needs.version.outputs.version }}"
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: "${{ needs.version.outputs.sha }}"
+    - name: 安装固定 Flutter
+      shell: bash
+      run: |-
+        git clone --depth 1 --branch 3.44.7 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+        echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+    - name: 构建并执行全量测试
+      shell: bash
+      run: |-
+        flutter pub get
+        printf 'CODE_SIGNING_ALLOWED=NO\nCODE_SIGNING_REQUIRED=NO\n' > "$RUNNER_TEMP/unsigned.xcconfig"
+        XCODE_XCCONFIG_FILE="$RUNNER_TEMP/unsigned.xcconfig" flutter build macos --release -t lib/main.dart --build-name "$VERSION" --build-number "$GITHUB_RUN_NUMBER"
+        flutter analyze --no-pub
+        flutter test --no-pub
+        APP='build/macos/Build/Products/Release/NPL Maintenance.app'
+        # CI 使用临时签名并保留沙盒权限；没有 Developer ID 或公证。
+        codesign --force --deep --sign - --entitlements macos/Runner/Release.entitlements "$APP"
+        codesign --verify --deep --strict "$APP"
+        mkdir -p "$RUNNER_TEMP/dmg-stage" dist
+        ditto "$APP" "$RUNNER_TEMP/dmg-stage/NPL Maintenance.app"
+        ln -s /Applications "$RUNNER_TEMP/dmg-stage/Applications"
+        hdiutil create -volname 'NPL Console' -srcfolder "$RUNNER_TEMP/dmg-stage" -ov -format UDZO "dist/NPL-Console-$TAG-macos-universal.dmg"
+    - name: 上传正式包
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: release-macos
+        path: dist/*
+        if-no-files-found: error
+        retention-days: 1
+  ios:
+    needs: version
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      TAG: "${{ needs.version.outputs.tag }}"
+      VERSION: "${{ needs.version.outputs.version }}"
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: "${{ needs.version.outputs.sha }}"
+    - name: 安装固定 Flutter
+      shell: bash
+      run: |-
+        git clone --depth 1 --branch 3.44.7 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+        echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+    - name: 构建真机正式 IPA
+      shell: bash
+      run: |-
+        flutter pub get
+        flutter build ios --no-codesign --release -t lib/main.dart --build-name "$VERSION" --build-number "$GITHUB_RUN_NUMBER"
+        mkdir -p "$RUNNER_TEMP/ipa-stage/Payload" dist
+        ditto build/ios/iphoneos/Runner.app "$RUNNER_TEMP/ipa-stage/Payload/Runner.app"
+        DEST="$GITHUB_WORKSPACE/dist/NPL-Console-$TAG-ios-unsigned.ipa"
+        cd "$RUNNER_TEMP/ipa-stage"
+        zip -qry "$DEST" Payload
+    - name: 上传正式包
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: release-ios
+        path: dist/*
+        if-no-files-found: error
+        retention-days: 1
+  android:
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      TAG: "${{ needs.version.outputs.tag }}"
+      VERSION: "${{ needs.version.outputs.version }}"
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: "${{ needs.version.outputs.sha }}"
+    - name: 安装固定 Flutter
+      shell: bash
+      run: |-
+        git clone --depth 1 --branch 3.44.7 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+        echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+    - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3
+      with:
+        distribution: temurin
+        java-version: '17'
+    - name: 安装 Android SDK
+      shell: bash
+      run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0'
+    - name: 恢复发布签名
+      shell: bash
+      run: |-
+        python3 - <<'SIGN'
+        import os, base64
+        from pathlib import Path
+        # 密钥仅写入临时构建环境，不写入日志或产物。
+        keys=['ANDROID_KEYSTORE_BASE64','ANDROID_KEYSTORE_PASSWORD','ANDROID_KEY_ALIAS','ANDROID_KEY_PASSWORD']
+        if any(not os.environ.get(k) for k in keys):
+            raise SystemExit('缺少 Android 发布签名 Secrets')
+        p=Path(os.environ['RUNNER_TEMP'])/'release.jks'
+        p.write_bytes(base64.b64decode(os.environ[keys[0]]))
+        p.chmod(0o600)
+        Path('android/key.properties').write_text('\n'.join(['storeFile='+str(p),'storePassword='+os.environ[keys[1]],'keyAlias='+os.environ[keys[2]],'keyPassword='+os.environ[keys[3]]]))
+        SIGN
+      env:
+        ANDROID_KEYSTORE_BASE64: "${{ secrets.ANDROID_KEYSTORE_BASE64 }}"
+        ANDROID_KEYSTORE_PASSWORD: "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}"
+        ANDROID_KEY_ALIAS: "${{ secrets.ANDROID_KEY_ALIAS }}"
+        ANDROID_KEY_PASSWORD: "${{ secrets.ANDROID_KEY_PASSWORD }}"
+    - name: 构建正式 APK
+      shell: bash
+      run: |-
+        flutter pub get
+        flutter build apk --release -t lib/main.dart --build-name "$VERSION" --build-number "$GITHUB_RUN_NUMBER"
+        mkdir -p dist
+        cp build/app/outputs/flutter-apk/app-release.apk "dist/NPL-Console-$TAG-android-release.apk"
+    - name: 上传正式包
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: release-android
+        path: dist/*
+        if-no-files-found: error
+        retention-days: 1
+  windows:
+    needs: version
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      TAG: "${{ needs.version.outputs.tag }}"
+      VERSION: "${{ needs.version.outputs.version }}"
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: "${{ needs.version.outputs.sha }}"
+    - name: 安装固定 Flutter
+      shell: bash
+      run: |-
+        git clone --depth 1 --branch 3.44.7 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+        echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+    - name: 构建正式版本
+      shell: pwsh
+      run: |-
+        flutter config --enable-windows-desktop
+        flutter pub get
+        flutter build windows --release -t lib/main.dart --build-name "$env:VERSION" --build-number "$env:GITHUB_RUN_NUMBER"
+        if ($LASTEXITCODE -ne 0) { throw "Windows Release 构建失败" }
+    - name: 签名并打包
+      shell: pwsh
+      run: |-
+        # 自签名只证明本次构建完整性，不是微软信任的发行者证书。
+        $bundle = 'build/windows/x64/runner/Release'
+        $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=NPL Console Release' -CertStoreLocation 'Cert:\CurrentUser\My' -HashAlgorithm SHA256 -KeyAlgorithm RSA -KeyLength 3072 -NotAfter (Get-Date).AddYears(3)
+        $tool = Get-ChildItem 'C:/Program Files (x86)/Windows Kits/10/bin/*/x64/signtool.exe' | Sort-Object FullName -Descending | Select-Object -First 1
+        if (-not $tool) { throw '未找到 Windows SDK signtool' }
+        & $tool.FullName sign /fd SHA256 /sha1 $cert.Thumbprint "$bundle/npl_maintenance.exe"
+        if ($LASTEXITCODE -ne 0) { throw 'Windows 代码签名失败' }
+        Export-Certificate -Cert $cert -FilePath "$bundle/NPL-Console-Publisher.cer" | Out-Null
+        $signature = Get-AuthenticodeSignature "$bundle/npl_maintenance.exe"
+        if (-not $signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint -ne $cert.Thumbprint) { throw '签名证书不匹配' }
+        @"
+        无纸化维护中心 Windows 正式版
+        完整解压后启动 npl_maintenance.exe，不要只复制 exe。
+        本包使用构建机生成的自签名证书，Windows 不会默认信任，可能出现 SmartScreen 提示。
+        不需要把随附证书安装到系统信任根；证书仅供核对签名。
+        构建版本：Release x64；源码提交：$env:GITHUB_SHA
+        "@ | Set-Content "$bundle/使用说明.txt" -Encoding utf8
+        New-Item -ItemType Directory -Force dist | Out-Null
+        Compress-Archive -Path "$bundle/*" -DestinationPath "dist/NPL-Console-$env:TAG-windows-x64-selfsigned.zip"
+    - name: 上传正式包
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: release-windows
+        path: dist/*
+        if-no-files-found: error
+        retention-days: 1
+  publish:
+    needs:
+    - version
+    - macos
+    - ios
+    - android
+    - windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: "${{ github.token }}"
+      GH_REPO: kiliter/npl-console
+      TAG: "${{ needs.version.outputs.tag }}"
+    steps:
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        pattern: release-*
+        path: dist
+        merge-multiple: true
+    - name: 发布完整正式版本
+      shell: bash
+      run: |-
+        # 仅在 GitHub runner 汇集产物，不下载到维护者电脑。
+        cat > notes.md <<'NOTES'
+        四端均由 GitHub Actions 从对应版本标签构建，使用 Release 正式模式。
+
+        - macOS：Universal DMG，ad-hoc 签名，未经 Apple 公证。
+        - Windows：x64 ZIP，自签名；解压完整目录后运行 EXE。
+        - Android：APK，使用持久发布密钥签名。
+        - iOS：真机 arm64 未签名 IPA，需要有效 Apple 签名后安装。
+
+        全量 Flutter 测试与静态检查由 macOS 构建任务执行。使用说明见仓库 README。
+        NOTES
+        if ! gh release view "$TAG" >/dev/null 2>&1; then
+          gh release create "$TAG" --verify-tag --draft --title "$TAG" --notes-file notes.md
+        fi
+        gh release upload "$TAG" dist/* --clobber
+        gh release edit "$TAG" --notes-file notes.md --draft=false --latest
