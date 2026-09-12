@@ -1,0 +1,22 @@
+.github/workflows/release.yml
+  h_b1099757fa8f7e 10
+CHANGELOG.md
+  h_b1099757fa8f7e 3
+docs/BUILD_RELEASE.md
+  h_b1099757fa8f7e 10-11,19
+docs/releases/v0.0.1.md
+  h_b1099757fa8f7e 3
+pubspec.yaml
+  h_b1099757fa8f7e 19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "985bfb17d3d353c0586d8480167f8a21741ceb96",
+  "prompts": {},
+  "humans": {
+    "h_b1099757fa8f7e": {
+      "author": "kiliter <kiliter@qq.com>"
+    }
+  }
+}
