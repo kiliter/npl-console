@@ -1,0 +1,247 @@
+.github/workflows/windows-release.yml
+  s_ad79439d2e5a19::t_79d286e8066973 1-54
+.gitignore
+  s_ad79439d2e5a19::t_d6f7cd4dcd5228 1-56
+.metadata
+  s_ad79439d2e5a19::t_63fc05f7c1fdb5 1-39
+CHANGELOG.md
+  s_ad79439d2e5a19::t_fee23a3489e5e3 1-16
+README.md
+  s_ad79439d2e5a19::t_09a1ffb29d8f93 1-87
+analysis_options.yaml
+  s_ad79439d2e5a19::t_61a19f213d6038 1-28
+android/.gitignore
+  s_ad79439d2e5a19::t_30ef9cf00c8bde 1-14
+android/app/build.gradle.kts
+  s_ad79439d2e5a19::t_8f5b03d7970296 1-63
+android/app/src/debug/AndroidManifest.xml
+  s_ad79439d2e5a19::t_823c006d48cbb0 1-7
+android/app/src/main/AndroidManifest.xml
+  s_ad79439d2e5a19::t_f924dc2182896b 1-48
+android/app/src/main/kotlin/cn/agilestar/npl_maintenance/MainActivity.kt
+  s_ad79439d2e5a19::t_364f971799a6e4 1-5
+android/app/src/main/res/drawable-v21/launch_background.xml
+  s_ad79439d2e5a19::t_ca6471f1fc67da 1-12
+android/app/src/main/res/drawable/launch_background.xml
+  s_ad79439d2e5a19::t_186fb692c288c0 1-12
+android/app/src/main/res/values-night/styles.xml
+  s_ad79439d2e5a19::t_b17537d082ba21 1-18
+android/app/src/main/res/values/styles.xml
+  s_ad79439d2e5a19::t_a6fef2d58b2219 1-18
+android/app/src/profile/AndroidManifest.xml
+  s_ad79439d2e5a19::t_f91904244dbecf 1-7
+android/build.gradle.kts
+  s_ad79439d2e5a19::t_e1d97ea44cc7d2 1-24
+android/gradle.properties
+  s_ad79439d2e5a19::t_d4b8bd8e8a7928 1-6
+android/gradle/wrapper/gradle-wrapper.properties
+  s_ad79439d2e5a19::t_84e4dd8aef5c72 1-5
+android/settings.gradle.kts
+  s_ad79439d2e5a19::t_7d9a9663cddecb 1-26
+assets/branding/icon-prompt.txt
+  s_ad79439d2e5a19::t_1a4e9be6cb388d 1
+design/maintenance-v2/app.js
+  s_ad79439d2e5a19::t_176c9e9c775b41 1-117
+design/maintenance-v2/index.html
+  s_ad79439d2e5a19::t_4afea96bab7952 1-10
+design/maintenance-v2/workspace.html
+  s_ad79439d2e5a19::t_64ceba987b124d 1
+docs/BUILD_RELEASE.md
+  s_ad79439d2e5a19::t_6d335a887ba50a 1-50
+docs/releases/v1.0.0.md
+  s_ad79439d2e5a19::t_cde4ca92cc0b7f 1-16
+ios/.gitignore
+  s_ad79439d2e5a19::t_156e26340499c2 1-34
+ios/Flutter/AppFrameworkInfo.plist
+  s_ad79439d2e5a19::t_7b7ae1e8206873 1-24
+ios/Flutter/Debug.xcconfig
+  s_ad79439d2e5a19::t_9acae133735c11 1
+ios/Flutter/Release.xcconfig
+  s_ad79439d2e5a19::t_9ea772c99bbd8e 1
+ios/Runner.xcodeproj/project.pbxproj
+  s_ad79439d2e5a19::t_6a91debfdcfdeb 1-650
+ios/Runner.xcodeproj/project.xcworkspace/contents.xcworkspacedata
+  s_ad79439d2e5a19::t_9b20f78c04fbb8 1-7
+ios/Runner.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
+  s_ad79439d2e5a19::t_85c6e0b4f80bf1 1-8
+ios/Runner.xcodeproj/project.xcworkspace/xcshareddata/WorkspaceSettings.xcsettings
+  s_ad79439d2e5a19::t_d463a4f2ad104d 1-8
+ios/Runner.xcodeproj/xcshareddata/xcschemes/Runner.xcscheme
+  s_ad79439d2e5a19::t_dd9ab444ee922b 1-119
+ios/Runner.xcworkspace/contents.xcworkspacedata
+  s_ad79439d2e5a19::t_f07299116a128f 1-7
+ios/Runner.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
+  s_ad79439d2e5a19::t_92daa92552b157 1-8
+ios/Runner.xcworkspace/xcshareddata/WorkspaceSettings.xcsettings
+  s_ad79439d2e5a19::t_b57b9b2dbc25fc 1-8
+ios/Runner/AppDelegate.swift
+  s_ad79439d2e5a19::t_be0ed62dc414e3 1-16
+ios/Runner/Assets.xcassets/AppIcon.appiconset/Contents.json
+  s_ad79439d2e5a19::t_16fc9857975961 1-122
+ios/Runner/Assets.xcassets/LaunchImage.imageset/Contents.json
+  s_ad79439d2e5a19::t_7b6e66c4e126f1 1-23
+ios/Runner/Assets.xcassets/LaunchImage.imageset/README.md
+  s_ad79439d2e5a19::t_7793a072a77e30 1-5
+ios/Runner/Base.lproj/LaunchScreen.storyboard
+  s_ad79439d2e5a19::t_cc53389f36df36 1-37
+ios/Runner/Base.lproj/Main.storyboard
+  s_ad79439d2e5a19::t_025d69c60bac41 1-26
+ios/Runner/Info.plist
+  s_ad79439d2e5a19::t_a6cf2b47331055 1-74
+ios/Runner/Runner-Bridging-Header.h
+  s_ad79439d2e5a19::t_3c742abc26fd61 1
+ios/Runner/Runner.entitlements
+  s_ad79439d2e5a19::t_89e0e4be8af239 1-3
+ios/Runner/SceneDelegate.swift
+  s_ad79439d2e5a19::t_bd9d5971a7a221 1-6
+ios/RunnerTests/RunnerTests.swift
+  s_ad79439d2e5a19::t_b0bd8a9bccc302 1-12
+lib/core/contracts.dart
+  s_ad79439d2e5a19::t_2e28d370ca1599 1-183
+lib/core/jwt_signer.dart
+  s_ad79439d2e5a19::t_3b1604807082e5 1-257
+lib/core/key_vault.dart
+  s_ad79439d2e5a19::t_9a04ce810ff11c 1-43
+lib/core/maintenance_controller.dart
+  s_ad79439d2e5a19::t_bcec1452a1a30c 1-586
+lib/core/message_document.dart
+  s_ad79439d2e5a19::t_d1b6bbfb140c9c 1-191
+lib/core/query_cache.dart
+  s_ad79439d2e5a19::t_78949a6ddd9733 1-59
+lib/main.dart
+  s_ad79439d2e5a19::t_62c848f92ef9c0 1-78
+lib/ui/file_preview.dart
+  s_ad79439d2e5a19::t_41d1e8bd8914d8 1-201
+lib/ui/image_gallery.dart
+  s_ad79439d2e5a19::t_ce0e38ae5d4c50 1-176
+lib/ui/logs_dialog.dart
+  s_ad79439d2e5a19::t_6f38c9a7a7bb8c 1-160
+lib/ui/maintenance_screen.dart
+  s_ad79439d2e5a19::t_588b8c6d774e24 1-827
+lib/ui/message_explorer.dart
+  s_ad79439d2e5a19::t_6a193373281252 1-477
+lib/ui/pdf_reader.dart
+  s_ad79439d2e5a19::t_994d7a24992dd2 1-213
+lib/ui/query_sheet.dart
+  s_ad79439d2e5a19::t_a4c276099eb7bc 1-494
+lib/ui/settings_dialog.dart
+  s_ad79439d2e5a19::t_e5859ba07e8f14 1-241
+lib/ui/work_details.dart
+  s_ad79439d2e5a19::t_bdf82452e13680 1-402
+macos/.gitignore
+  s_ad79439d2e5a19::t_f03bc0d24af9f1 1-7
+macos/Flutter/Flutter-Debug.xcconfig
+  s_ad79439d2e5a19::t_c8b3967aeaaf33 1
+macos/Flutter/Flutter-Release.xcconfig
+  s_ad79439d2e5a19::t_9f6ea122201d56 1
+macos/Runner.xcodeproj/project.pbxproj
+  s_ad79439d2e5a19::t_a5aa9e52ffc585 1-732
+macos/Runner.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
+  s_ad79439d2e5a19::t_9a1e3879cbea50 1-8
+macos/Runner.xcodeproj/xcshareddata/xcschemes/Runner.xcscheme
+  s_ad79439d2e5a19::t_d1d40ed1fcbdf2 1-117
+macos/Runner.xcworkspace/contents.xcworkspacedata
+  s_ad79439d2e5a19::t_d034f5648d11bf 1-7
+macos/Runner.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
+  s_ad79439d2e5a19::t_52df722884740f 1-8
+macos/Runner/AppDelegate.swift
+  s_ad79439d2e5a19::t_fac453704cebc1 1-13
+macos/Runner/Assets.xcassets/AppIcon.appiconset/Contents.json
+  s_ad79439d2e5a19::t_40fc1fe96e55ed 1-68
+macos/Runner/Base.lproj/MainMenu.xib
+  s_ad79439d2e5a19::t_f35a07330e4874 1-343
+macos/Runner/Configs/AppInfo.xcconfig
+  s_ad79439d2e5a19::t_5b894b67645fba 1-14
+macos/Runner/Configs/Debug.xcconfig
+  s_ad79439d2e5a19::t_1f64c6ce4e7696 1-2
+macos/Runner/Configs/Release.xcconfig
+  s_ad79439d2e5a19::t_561e83387610f2 1-2
+macos/Runner/Configs/Warnings.xcconfig
+  s_ad79439d2e5a19::t_231ae647101533 1-13
+macos/Runner/DebugProfile.entitlements
+  s_ad79439d2e5a19::t_c4790d75ba9f27 1-16
+macos/Runner/Info.plist
+  s_ad79439d2e5a19::t_ee2c0bedc187f8 1-32
+macos/Runner/Release.entitlements
+  s_ad79439d2e5a19::t_67d85c2b2958e1 1-12
+macos/RunnerTests/RunnerTests.swift
+  s_ad79439d2e5a19::t_90b1032ccd2b33 1-12
+pubspec.yaml
+  s_ad79439d2e5a19::t_004c5f75e70989 1-99
+test/cache_test.dart
+  s_ad79439d2e5a19::t_1e11e4da25d3e4 1-118
+test/contracts_test.dart
+  s_ad79439d2e5a19::t_9e5d5af90520f9 1-155
+test/details_test.dart
+  s_ad79439d2e5a19::t_96b0721f63f0ac 1-71
+test/fixtures/public.json
+  s_ad79439d2e5a19::t_c9420c08883900 1
+test/history_test.dart
+  s_ad79439d2e5a19::t_d9b731ce5d5455 1-47
+test/jwt_test.dart
+  s_ad79439d2e5a19::t_80b15937a47878 1-51
+test/key_vault_test.dart
+  s_ad79439d2e5a19::t_42bca861d0b4df 1-66
+test/message_document_test.dart
+  s_ad79439d2e5a19::t_1cb9808cc4bc29 1-37
+test/message_explorer_test.dart
+  s_ad79439d2e5a19::t_0df0456dfa56fa 1-89
+test/mobile_test.dart
+  s_ad79439d2e5a19::t_c4c294a109fb26 1-44
+test/native_http_test.dart
+  s_ad79439d2e5a19::t_439d6c6a76379b 1-50
+test/pdf_reader_test.dart
+  s_ad79439d2e5a19::t_2ef59d391feb5c 1-53
+test/preview_test.dart
+  s_ad79439d2e5a19::t_127f2464c972cc 1-71
+test/widget_test.dart
+  s_ad79439d2e5a19::t_211e67c5ea8429 1-24
+tool/keychain_probe.dart
+  s_ad79439d2e5a19::t_7e84018118b8f7 1-33
+windows/.gitignore
+  s_ad79439d2e5a19::t_830a46c0a51d77 1-17
+windows/CMakeLists.txt
+  s_ad79439d2e5a19::t_5a26a33022579e 1-108
+windows/flutter/CMakeLists.txt
+  s_ad79439d2e5a19::t_b37e1605eafbf1 1-109
+windows/flutter/generated_plugin_registrant.h
+  s_ad79439d2e5a19::t_2b44be6e2958e3 1-15
+windows/runner/CMakeLists.txt
+  s_ad79439d2e5a19::t_45cc3562d28083 1-40
+windows/runner/Runner.rc
+  s_ad79439d2e5a19::t_82ad420536cae3 1-121
+windows/runner/flutter_window.cpp
+  s_ad79439d2e5a19::t_399b16907d36ad 1-71
+windows/runner/flutter_window.h
+  s_ad79439d2e5a19::t_ff8209825d2adb 1-33
+windows/runner/main.cpp
+  s_ad79439d2e5a19::t_682802fb37a2c3 1-43
+windows/runner/resource.h
+  s_ad79439d2e5a19::t_c549334037f404 1-16
+windows/runner/runner.exe.manifest
+  s_ad79439d2e5a19::t_778faaa5691eb3 1-14
+windows/runner/utils.cpp
+  s_ad79439d2e5a19::t_e43cb602abcc14 1-69
+windows/runner/utils.h
+  s_ad79439d2e5a19::t_6726b3876c4132 1-19
+windows/runner/win32_window.cpp
+  s_ad79439d2e5a19::t_58007b51ba3089 1-288
+windows/runner/win32_window.h
+  s_ad79439d2e5a19::t_4eb25f7451a9d7 1-102
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "c4abead530f924d4dd23228743a87b8c8ea52685",
+  "prompts": {},
+  "sessions": {
+    "s_ad79439d2e5a19": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a09579-b63c-7632-8e22-d7f6759d4440",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "kiliter <kiliter@qq.com>"
+    }
+  }
+}
