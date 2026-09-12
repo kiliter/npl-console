@@ -1,0 +1,19 @@
+android/app/build.gradle.kts
+  s_ad79439d2e5a19::t_c03af9ef4dc665 18-19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "ad1ba487cfb96969ac707ae7ba96b9a3e84ca2eb",
+  "prompts": {},
+  "sessions": {
+    "s_ad79439d2e5a19": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a09579-b63c-7632-8e22-d7f6759d4440",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "kiliter <kiliter@qq.com>"
+    }
+  }
+}
