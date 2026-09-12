@@ -7,8 +7,8 @@
 先提交并推送代码，再创建版本标签：
 
 ```bash
-git tag -a v1.0.1 -m "发布 v1.0.1"
-git push origin v1.0.1
+git tag -a v0.0.2 -m "发布 v0.0.2"
+git push origin v0.0.2
 ```
 
 推送 `v*` 标签自动触发；正式版本格式为 `v数字.数字.数字`。macOS 执行静态检查、全量 Flutter 测试；四端构建全部成功后汇集附件并发布 Release。失败时不发布不完整的新版本。
@@ -16,7 +16,7 @@ git push origin v1.0.1
 已有标签可手动补发，无需移动标签：
 
 ```bash
-gh workflow run release.yml --ref main -f tag=v1.0.0
+gh workflow run release.yml --ref main -f tag=v0.0.1
 ```
 
 手动补发使用 main 的工作流定义，但业务源码仍取指定标签。相同标签附件会覆盖，请仅在修复构建流程后使用。

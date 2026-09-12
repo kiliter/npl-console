@@ -7,7 +7,7 @@ name: 四端正式发布
   workflow_dispatch:
     inputs:
       tag:
-        description: 已存在版本标签，例如 v1.0.0
+        description: 已存在版本标签，例如 v0.0.1
         required: true
         type: string
 permissions:
