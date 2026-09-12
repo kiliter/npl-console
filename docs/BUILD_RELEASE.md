@@ -8,10 +8,9 @@
 
 ```bash
 flutter build apk --release -t lib/main.dart
-flutter build appbundle --release -t lib/main.dart
 ```
 
-发布 APK 位于 `build/app/outputs/flutter-apk/app-release.apk`；AAB 是应用商店分发辅助包。请在安全位置备份发布 JKS 和密码，后续升级必须沿用。发布签名改变后，旧 Debug 签名安装无法覆盖升级。
+发布 APK 位于 `build/app/outputs/flutter-apk/app-release.apk`。请在安全位置备份发布 JKS 和密码，后续升级必须沿用。发布签名改变后，旧 Debug 签名安装无法覆盖升级。
 
 ## macOS
 

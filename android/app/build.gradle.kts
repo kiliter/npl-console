@@ -15,7 +15,8 @@ if (releasePropertiesFile.exists()) {
 
 android {
     namespace = "cn.agilestar.npl_maintenance"
-    compileSdk = flutter.compileSdkVersion
+    // 与 flutter_secure_storage 11 的 AAR 编译契约一致，运行时目标版本保持原配置。
+    compileSdk = 37
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
