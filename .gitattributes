@@ -1,0 +1,5 @@
+# 二进制文件保持原始字节，PDF xref 的尾空格不可自动修剪。
+*.pdf binary
+*.jks binary
+*.png binary
+*.ico binary

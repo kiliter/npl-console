@@ -1,0 +1,54 @@
+name: Windows Release
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: 获取源码
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: 安装固定 Flutter 版本
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch 3.44.7 https://github.com/flutter/flutter.git "$env:RUNNER_TEMP/flutter"
+          "$env:RUNNER_TEMP/flutter/bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+      - name: 构建正式版本
+        shell: pwsh
+        run: |
+          flutter config --enable-windows-desktop
+          flutter pub get
+          flutter build windows --release -t lib/main.dart
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Release 构建失败' }
+      - name: 本机生成代码签名并打包
+        shell: pwsh
+        run: |
+          # 自签名只证明本次构建完整性，不是微软信任的发行者证书。
+          $bundle = 'build/windows/x64/runner/Release'
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=NPL Console Release' -CertStoreLocation 'Cert:\CurrentUser\My' -HashAlgorithm SHA256 -KeyAlgorithm RSA -KeyLength 3072 -NotAfter (Get-Date).AddYears(3)
+          $tool = Get-ChildItem 'C:/Program Files (x86)/Windows Kits/10/bin/*/x64/signtool.exe' | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $tool) { throw '未找到 Windows SDK signtool' }
+          & $tool.FullName sign /fd SHA256 /sha1 $cert.Thumbprint "$bundle/npl_maintenance.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'Windows 代码签名失败' }
+          Export-Certificate -Cert $cert -FilePath "$bundle/NPL-Console-Publisher.cer" | Out-Null
+          $signature = Get-AuthenticodeSignature "$bundle/npl_maintenance.exe"
+          if (-not $signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint -ne $cert.Thumbprint) { throw '签名证书不匹配' }
+          @"
+          无纸化维护中心 Windows 正式版
+          完整解压后启动 npl_maintenance.exe，不要只复制 exe。
+          本包使用构建机生成的自签名证书，Windows 不会默认信任，可能出现 SmartScreen 提示。
+          不需要把随附证书安装到系统信任根；证书仅供核对签名。
+          构建版本：Release x64；源码提交：$env:GITHUB_SHA
+          "@ | Set-Content "$bundle/使用说明.txt" -Encoding utf8
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path "$bundle/*" -DestinationPath 'dist/NPL-Console-v1.0.0-windows-x64-selfsigned.zip'
+          (Get-FileHash 'dist/NPL-Console-v1.0.0-windows-x64-selfsigned.zip' -Algorithm SHA256).Hash | Set-Content dist/windows-sha256.txt
+      - name: 上传正式包
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-release
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
