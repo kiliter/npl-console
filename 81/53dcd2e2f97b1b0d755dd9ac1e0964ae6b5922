@@ -1,0 +1,14 @@
+.github/workflows/release.yml
+  h_b1099757fa8f7e 133,135
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "8153dcd2e2f97b1b0d755dd9ac1e0964ae6b5922",
+  "prompts": {},
+  "humans": {
+    "h_b1099757fa8f7e": {
+      "author": "kiliter <kiliter@qq.com>"
+    }
+  }
+}
