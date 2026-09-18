@@ -92,6 +92,70 @@ List<Record> queryBodies(
   ];
 }
 
+/// 数据查询支持的四张业务表，分别复用现有只读接口，不新增后端接口。
+/// 命名为 TableKind 以避免与 Flutter 的 DataTable 控件冲突。
+enum TableKind { woinfo, wobizinfo, wosigninfo, wopicinfo }
+
+extension TableKindName on TableKind {
+  /// 面板展示用的中文名称。
+  String get label => ['工单表', '报文表', '签字表', '图片表'][index];
+
+  /// 服务端物理表名（按月份分表，此处为基表名）。
+  String get tableName =>
+      ['WO_INFO', 'WO_BIZ_INFO', 'WO_SIGN_INFO', 'WO_PIC_INFO'][index];
+
+  /// 复用的只读查询接口类别。
+  Category get category => [
+    Category.work,
+    Category.message,
+    Category.sign,
+    Category.picture,
+  ][index];
+
+  /// 图片序号条件仅适用于图片表。
+  bool get hasPicSeq => this == TableKind.wopicinfo;
+}
+
+/// 构造按表查询请求体：只放入非空条件；opMonth 由 YYYY-MM 转为 YYYYMM，
+/// 供服务端定位按月份拆分的物理表（如 WO_INFO202610）。
+Record tableQueryBody(
+  TableKind table, {
+  String caseNo = '',
+  String sysAccept = '',
+  String opMonth = '',
+  String picSeq = '',
+}) {
+  caseNo = caseNo.trim();
+  sysAccept = sysAccept.trim();
+  opMonth = opMonth.trim();
+  picSeq = picSeq.trim();
+  if (caseNo.isEmpty && sysAccept.isEmpty && opMonth.isEmpty && picSeq.isEmpty) {
+    throw const FormatException('请至少填写一个查询条件');
+  }
+  if (caseNo.isEmpty && sysAccept.isNotEmpty && opMonth.isEmpty) {
+    throw const FormatException('按受理流水查询请选择业务月份');
+  }
+  final body = <String, dynamic>{};
+  if (caseNo.isNotEmpty) body['caseNo'] = caseNo;
+  if (sysAccept.isNotEmpty) body['sysAccept'] = sysAccept;
+  if (opMonth.isNotEmpty) {
+    if (!RegExp(r'^\d{4}-(0[1-9]|1[0-2])$').hasMatch(opMonth)) {
+      throw const FormatException('月份格式应为 YYYY-MM，例如 2026-09');
+    }
+    body['opMonth'] = opMonth.replaceAll('-', '');
+  }
+  if (picSeq.isNotEmpty) {
+    if (!table.hasPicSeq) {
+      throw const FormatException('图片序号仅适用于图片表');
+    }
+    if (!RegExp(r'^\d+$').hasMatch(picSeq) || int.parse(picSeq) <= 0) {
+      throw const FormatException('图片序号应为正整数');
+    }
+    body['picSeq'] = picSeq;
+  }
+  return body;
+}
+
 /// OBS 命名依据 UploadFile2ObsHandler、OneStoreModelFileObjectService 与 WoBizTxtTypeEnum。
 class Asset {
   final String name, label, kind;

@@ -56,9 +56,12 @@
 | 报文 | `/api/wobiz/queryList` | 选中工单的 `caseNo + opMonth` |
 | 签字 | `/api/wosign/queryList` | 同上 |
 | 图片 | `/api/wopic/queryList` | 同上 |
+| 全量报文 | `/agapi/biz/downloadBiz` | `caseNo`，返回 `{result, data, desc}`，`result` 为 0 时 `data` 为报文内容 |
 | OBS | `/test/un_look` | 表单 `bucketName + objectName + ext8` |
 
 JWT 使用 RS256，有效期 20 分钟，通过 `kkk` 与 `agAuthorization` 请求头发送。HTTP 出口限制为上述路径，不包含新增、修改、删除和上传接口。默认保持系统 HTTPS 校验，不跟随重定向。
+
+「数据查询」面板按物理表（WO_INFO / WO_BIZ_INFO / WO_SIGN_INFO / WO_PIC_INFO）直查数据，复用上表四个只读接口，不新增接口路径。请求体为按表组合的非空条件：`caseNo`、`sysAccept`、`opMonth`（`YYYYMM`，定位月份分表）、`picSeq`（仅图片表）；至少填写一个条件，按受理流水查询须搭配业务月份。结果以表格展示，点击行查看完整字段。
 
 ## 本地开发与构建
 

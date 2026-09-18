@@ -9,6 +9,7 @@ import 'file_preview.dart';
 import 'image_gallery.dart';
 import 'settings_dialog.dart';
 import 'query_sheet.dart';
+import 'table_query_sheet.dart';
 import 'work_details.dart';
 import 'logs_dialog.dart';
 
@@ -100,6 +101,24 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
   void logs() => showDialog<void>(
     context: context,
     builder: (_) => LogsDialog(controller: c),
+  );
+
+  /// 数据查询作为独立弹层呈现，不影响当前工单查询结果与阅读区。
+  void openTableQuery() => showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    useSafeArea: true,
+    backgroundColor: Colors.white,
+    constraints: const BoxConstraints(maxWidth: 720),
+    builder: (context) => Padding(
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.viewInsetsOf(context).bottom,
+      ),
+      child: SizedBox(
+        height: MediaQuery.sizeOf(context).height * .9,
+        child: TableQuerySheet(controller: c),
+      ),
+    ),
   );
   void choose(Record record) {
     section = 0;
@@ -212,6 +231,12 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
             icon: const Icon(Icons.cached, size: 19),
           ),
           TextButton.icon(
+            onPressed: openTableQuery,
+            icon: const Icon(Icons.table_view_outlined, size: 18),
+            label: const Text('数据查询'),
+          ),
+          const SizedBox(width: 8),
+          TextButton.icon(
             onPressed: logs,
             icon: const Icon(Icons.data_object, size: 18),
             label: Text('接口记录 ${c.logs.length}'),
@@ -234,9 +259,11 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
             onSelected: (v) {
               if (v == 'settings') settings();
               if (v == 'logs') logs();
+              if (v == 'tables') openTableQuery();
               if (v == 'cache') c.clearCache();
             },
             itemBuilder: (_) => [
+              const PopupMenuItem(value: 'tables', child: Text('数据查询')),
               const PopupMenuItem(value: 'settings', child: Text('连接与密钥设置')),
               PopupMenuItem(
                 value: 'logs',

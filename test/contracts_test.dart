@@ -28,6 +28,50 @@ void main() {
       {'caseNo': 'CASE'},
     ]);
   });
+  test('按表查询仅保留非空条件，月份转分表格式，图片序号限定图片表', () {
+    expect(tableQueryBody(TableKind.woinfo, caseNo: 'CASE'), {
+      'caseNo': 'CASE',
+    });
+    expect(
+      tableQueryBody(
+        TableKind.woinfo,
+        sysAccept: ' FLOW ',
+        opMonth: '2026-09',
+      ),
+      {'sysAccept': 'FLOW', 'opMonth': '202609'},
+    );
+    expect(
+      tableQueryBody(
+        TableKind.wopicinfo,
+        caseNo: 'CASE',
+        opMonth: '2026-09',
+        picSeq: '3',
+      ),
+      {'caseNo': 'CASE', 'opMonth': '202609', 'picSeq': '3'},
+    );
+    expect(() => tableQueryBody(TableKind.woinfo), throwsFormatException);
+    expect(
+      () => tableQueryBody(TableKind.woinfo, sysAccept: 'FLOW'),
+      throwsFormatException,
+    );
+    expect(
+      () => tableQueryBody(TableKind.woinfo, caseNo: 'CASE', opMonth: '2026-9'),
+      throwsFormatException,
+    );
+    expect(
+      () => tableQueryBody(TableKind.woinfo, caseNo: 'CASE', picSeq: '1'),
+      throwsFormatException,
+    );
+    expect(
+      () =>
+          tableQueryBody(TableKind.wopicinfo, caseNo: 'CASE', picSeq: 'abc'),
+      throwsFormatException,
+    );
+    expect(
+      () => tableQueryBody(TableKind.wopicinfo, caseNo: 'CASE', picSeq: '0'),
+      throwsFormatException,
+    );
+  });
   test('多文件按平台既有规则构造对象名与解密参数', () {
     final work = <String, dynamic>{
       'caseNo': 'CASE',
@@ -150,6 +194,73 @@ void main() {
     expect(controller.works.length, 1);
     expect(controller.failures.length, 1);
     expect(controller.error, isTrue);
+    controller.dispose();
+  });
+  test('全量报文仅传 caseNo，成功返回内容，失败抛出服务端描述', () async {
+    final requests = <http.Request>[];
+    var fail = false;
+    final controller = MaintenanceController(
+      clientFactory: () => MockClient((request) async {
+        requests.add(request);
+        return fail
+            ? http.Response(
+                '{"result":1,"desc":"不存在此单据"}',
+                200,
+                headers: {'content-type': 'application/json; charset=utf-8'},
+              )
+            : http.Response('{"result":0,"data":"<xml/>","desc":""}', 200);
+      }),
+      testToken: () => 'temporary-test-token',
+    )..settings = settings;
+    // 未选择工单时本地拒绝，不发起请求。
+    await expectLater(controller.downloadFullBiz(), throwsFormatException);
+    expect(requests, isEmpty);
+    controller.work = {'caseNo': 'CASE'};
+    final content = await controller.downloadFullBiz();
+    expect(content, '<xml/>');
+    expect(requests.single.url.path, '/npl/agapi/biz/downloadBiz');
+    expect(jsonDecode(requests.single.body), {'caseNo': 'CASE'});
+    expect(controller.error, isFalse);
+    expect(controller.logs.single.state, '成功');
+    fail = true;
+    await expectLater(
+      controller.downloadFullBiz(),
+      throwsA(
+        isA<FormatException>().having(
+          (e) => e.message,
+          'message',
+          contains('不存在此单据'),
+        ),
+      ),
+    );
+    expect(controller.error, isTrue);
+    controller.dispose();
+  });
+  test('报文列表追加全量报文，选中后经 downloadBiz 加载为文本解析', () async {
+    final controller = MaintenanceController(
+      clientFactory: () => MockClient((request) async {
+        if (request.url.path.endsWith('/agapi/biz/downloadBiz')) {
+          return http.Response('{"result":0,"data":"{\\"a\\":1}","desc":""}', 200);
+        }
+        if (request.url.path.endsWith('/test/un_look')) {
+          return http.Response('留存报文内容', 200, headers: {
+            'content-type': 'text/plain; charset=utf-8',
+          });
+        }
+        return http.Response('[{"caseNo":"CASE","cmdCode":"cmdjs001"}]', 200);
+      }),
+      testToken: () => 'test',
+    )..settings = settings;
+    controller.work = {'caseNo': 'CASE', 'opMonth': '202609', 'regionCode': '025'};
+    await controller.selectCategory(Category.message);
+    // 三份留存报文之后追加一份全量报文，默认仍加载首份留存报文。
+    expect(controller.assets.length, 4);
+    expect(controller.assets.last.kind, 'fullbiz');
+    expect(controller.assets.last.label, '全量报文');
+    await controller.loadAsset(controller.assets.last);
+    expect(utf8.decode(controller.bytes!), '{"a":1}');
+    expect(controller.contentType, 'text');
+    expect(controller.asset?.name, 'CASE_全量报文.json');
     controller.dispose();
   });
 }

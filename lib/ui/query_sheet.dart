@@ -148,7 +148,7 @@ class _QuerySheetState extends State<QuerySheet> {
     final current = last ? q.end : q.start;
     final selected = await showDialog<DateTime>(
       context: context,
-      builder: (_) => _MonthPicker(current: current),
+      builder: (_) => MonthPicker(current: current),
     );
     if (selected != null && mounted) {
       setState(() {
@@ -441,14 +441,15 @@ class _QuerySheetState extends State<QuerySheet> {
 }
 
 /// 年份可切换的月份网格，手机单手选择，无日期粒度的多余操作。
-class _MonthPicker extends StatefulWidget {
+/// 查询面板与数据查询面板共用。
+class MonthPicker extends StatefulWidget {
   final DateTime current;
-  const _MonthPicker({required this.current});
+  const MonthPicker({super.key, required this.current});
   @override
-  State<_MonthPicker> createState() => _MonthPickerState();
+  State<MonthPicker> createState() => _MonthPickerState();
 }
 
-class _MonthPickerState extends State<_MonthPicker> {
+class _MonthPickerState extends State<MonthPicker> {
   late int year = widget.current.year;
   @override
   Widget build(BuildContext context) => AlertDialog(

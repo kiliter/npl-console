@@ -25,6 +25,7 @@ class CallLog {
 /// 业务状态集中管理；视图与平台 I/O 分离，桌面及手机共用只读查询链路。
 class MaintenanceController extends ChangeNotifier {
   static const obsEndpoint = '/test/un_look';
+  static const bizDownloadEndpoint = '/agapi/biz/downloadBiz';
   final http.Client Function() clientFactory;
   final String Function()? testToken;
   ConnectionSettings settings = const ConnectionSettings();
@@ -191,6 +192,7 @@ class MaintenanceController extends ChangeNotifier {
     if (![
       ...Category.values.map((type) => type.endpoint),
       obsEndpoint,
+      bizDownloadEndpoint,
     ].contains(endpoint)) {
       throw const FormatException('拒绝调用非查询接口');
     }
@@ -235,6 +237,7 @@ class MaintenanceController extends ChangeNotifier {
     if (![
       ...Category.values.map((type) => type.endpoint),
       obsEndpoint,
+      bizDownloadEndpoint,
     ].contains(endpoint)) {
       throw const FormatException('拒绝调用非查询接口');
     }
@@ -368,6 +371,92 @@ class MaintenanceController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 数据查询直接复用各类别只读接口，返回原始记录交由弹层展示。
+  /// 校验或请求失败时抛出 FormatException，由调用方就地展示；
+  /// 正常完成与失败都会更新全局状态条，请求本身写入接口记录。
+  Future<List<Record>> queryTable(TableKind table, Record body) async {
+    try {
+      settings.validate();
+      if (signer == null && testToken == null) {
+        throw const FormatException('请先导入密钥库');
+      }
+    } on FormatException catch (exception) {
+      _fail(exception);
+      rethrow;
+    }
+    final ticket = _start();
+    message = '正在查询${table.label}…';
+    notifyListeners();
+    try {
+      final rows = await _list(table.category.endpoint, body, ticket);
+      if (ticket != _generation) throw const _Cancelled();
+      busy = false;
+      error = false;
+      message = '${table.label}查询完成 · ${rows.length} 条记录。';
+      notifyListeners();
+      return rows;
+    } catch (exception) {
+      if (ticket != _generation) throw const _Cancelled();
+      _fail(exception);
+      throw FormatException(_errorText(exception));
+    }
+  }
+
+  /// 下载全量报文（WoBizController#downloadBiz）：仅传 caseNo，服务端返回
+  /// {result, data, desc, details}，result 为 0 时 data 即全量报文内容。
+  /// 结果由调用方保存为文件；不使用 _start()，避免清空当前预览内容。
+  Future<String> downloadFullBiz() async {
+    final selected = work;
+    if (selected == null) {
+      throw const FormatException('请先选择一份工单，再下载全量报文');
+    }
+    try {
+      settings.validate();
+      if (signer == null && testToken == null) {
+        throw const FormatException('请先导入密钥库');
+      }
+    } on FormatException catch (exception) {
+      _fail(exception);
+      rethrow;
+    }
+    final ticket = _generation;
+    _client ??= clientFactory();
+    busy = true;
+    error = false;
+    message = '正在下载全量报文…';
+    notifyListeners();
+    try {
+      final response = await _networkRequest(
+        bizDownloadEndpoint,
+        {'caseNo': '${selected['caseNo'] ?? ''}'},
+        ticket,
+      );
+      if (ticket != _generation) throw const _Cancelled();
+      final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+      if (decoded is! Map) {
+        throw const FormatException('全量报文接口未返回预期 JSON，请查看接口记录');
+      }
+      // 后端成功分支写数字 0，参数校验失败分支写字符串 "1"，统一按文本比较。
+      if ('${decoded['result']}' != '0') {
+        throw FormatException(
+          '下载全量报文失败：${decoded['desc'] ?? '服务端未说明原因'}',
+        );
+      }
+      final data = '${decoded['data'] ?? ''}';
+      if (data.isEmpty) throw const FormatException('服务端返回的全量报文为空');
+      busy = false;
+      error = false;
+      message =
+          '全量报文下载完成 · ${(utf8.encode(data).length / 1024).toStringAsFixed(1)} KB';
+      notifyListeners();
+      return data;
+    } catch (exception) {
+      if (ticket != _generation) throw const _Cancelled();
+      _fail(exception);
+      throw FormatException(_errorText(exception));
+    }
+  }
+
   void chooseWork(Record selected) {
     _start();
     work = selected;
@@ -422,6 +511,18 @@ class MaintenanceController extends ChangeNotifier {
       if (ticket != _generation) return;
       linkedRecords = rows;
       assets = Asset.fromRecords(type, rows, work!);
+      // 报文文件列表追加「全量报文」选项；它不是 OBS 文件，
+      // 选中时由 loadAsset 改走 downloadBiz 接口，默认仍加载首份留存报文。
+      if (type == Category.message) {
+        assets.add(
+          Asset(
+            '${work!['caseNo']}_全量报文.json',
+            '全量报文',
+            'fullbiz',
+            work!,
+          ),
+        );
+      }
       if (assets.isEmpty) {
         busy = false;
         message = '当前工单没有${type.label}';
@@ -444,6 +545,8 @@ class MaintenanceController extends ChangeNotifier {
   Future<void> loadAsset(Asset next, {bool forceRefresh = false}) async {
     if (busy && asset?.name == next.name && !forceRefresh) return;
     if (work == null) return;
+    // 全量报文不存 OBS，改走 downloadBiz 接口。
+    if (next.kind == 'fullbiz') return loadFullBiz(next);
     final ticket = _start();
     asset = next;
     message = '正在从 OBS 读取 ${next.name}…';
@@ -473,6 +576,32 @@ class MaintenanceController extends ChangeNotifier {
       notifyListeners();
     } catch (exception) {
       if (ticket == _generation) _fail(exception);
+    }
+  }
+
+  /// 选中「全量报文」时调用 downloadBiz 接口获取 JSON 内容，
+  /// 按文本报文交给报文解析器展示；失败状态由 downloadFullBiz 写入状态条。
+  Future<void> loadFullBiz(Asset next) async {
+    if (work == null) return;
+    final ticket = _start();
+    asset = next;
+    busy = true;
+    message = '正在下载全量报文…';
+    notifyListeners();
+    try {
+      final content = await downloadFullBiz();
+      if (ticket != _generation) return;
+      final data = Uint8List.fromList(utf8.encode(content));
+      contentType = detectType(data, 'text');
+      bytes = data;
+      busy = false;
+      message =
+          '全量报文加载完成 · ${(data.length / 1024).toStringAsFixed(1)} KB';
+      notifyListeners();
+    } on FormatException {
+      // downloadFullBiz 已更新状态条，此处不重复处理。
+    } catch (_) {
+      // 已取消或代次失效，迟到结果直接丢弃。
     }
   }
 
