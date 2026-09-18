@@ -1,0 +1,34 @@
+CHANGELOG.md
+  h_b1099757fa8f7e 3-12
+README.md
+  h_b1099757fa8f7e 59,64-65
+docs/releases/v1.1.0.md
+  h_b1099757fa8f7e 1-15
+lib/core/contracts.dart
+  h_b1099757fa8f7e 95-158
+lib/core/maintenance_controller.dart
+  h_b1099757fa8f7e 28,195,240,374-459,514-525,548-549,582-607
+lib/ui/maintenance_screen.dart
+  h_b1099757fa8f7e 12,105-122,233-238,262,266
+lib/ui/query_sheet.dart
+  h_b1099757fa8f7e 151,444-445,447,449,452
+lib/ui/table_query_sheet.dart
+  h_b1099757fa8f7e 1-502
+pubspec.yaml
+  h_b1099757fa8f7e 19
+test/contracts_test.dart
+  h_b1099757fa8f7e 31-74,199-265
+test/table_query_test.dart
+  h_b1099757fa8f7e 1-99
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "8110aef1ad610b8432e718698a491cc5a65f6a12",
+  "prompts": {},
+  "humans": {
+    "h_b1099757fa8f7e": {
+      "author": "kiliter <kiliter@qq.com>"
+    }
+  }
+}
