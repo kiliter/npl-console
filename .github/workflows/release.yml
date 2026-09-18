@@ -130,8 +130,9 @@ jobs:
         distribution: temurin
         java-version: '17'
     # 显式安装命令行工具，避免 runner 未将 sdkmanager 加入 PATH。
+    # v4.0.4（be39fa83）修复新 runner 镜像中 sdkmanager 无法安装旧版 tools 包的问题。
     - name: 配置 Android 命令行工具
-      uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
+      uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
     - name: 安装 Android SDK
       shell: bash
       run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0'
