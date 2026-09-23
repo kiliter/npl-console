@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'core/maintenance_controller.dart';
+import 'core/update_check.dart';
 import 'ui/maintenance_screen.dart';
+import 'ui/update_dialog.dart';
 
 /// 原生入口；网络由 Dart HTTP 执行，不嵌入网页代理。
 void main() {
@@ -10,11 +12,37 @@ void main() {
   controller.restore();
 }
 
-class MaintenanceApp extends StatelessWidget {
+class MaintenanceApp extends StatefulWidget {
   final MaintenanceController controller;
   const MaintenanceApp({super.key, required this.controller});
   @override
+  State<MaintenanceApp> createState() => _MaintenanceAppState();
+}
+
+class _MaintenanceAppState extends State<MaintenanceApp> {
+  /// 全局 Navigator key：启动自动检查更新时需要在 MaterialApp 之下弹窗。
+  final _navigatorKey = GlobalKey<NavigatorState>();
+
+  @override
+  void initState() {
+    super.initState();
+    // 首帧渲染后静默检查新版本，仅发现更新时打扰用户。
+    WidgetsBinding.instance.addPostFrameCallback((_) => _autoCheckUpdate());
+  }
+
+  /// 启动自动检查：失败（无网络、GitHub 不可达等）静默忽略，不影响使用。
+  Future<void> _autoCheckUpdate() async {
+    try {
+      final update = await checkLatestRelease();
+      final context = _navigatorKey.currentContext;
+      if (update == null || context == null || !context.mounted) return;
+      await showUpdateDialog(context, update);
+    } catch (_) {}
+  }
+
+  @override
   Widget build(BuildContext context) => MaterialApp(
+    navigatorKey: _navigatorKey,
     title: '无纸化维护中心',
     debugShowCheckedModeBanner: false,
     theme: ThemeData(
@@ -73,6 +101,6 @@ class MaintenanceApp extends StatelessWidget {
         ),
       ),
     ),
-    home: MaintenanceScreen(controller: controller),
+    home: MaintenanceScreen(controller: widget.controller),
   );
 }

@@ -1,11 +1,12 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
+import '../core/app_update.dart';
 import '../core/contracts.dart';
 import '../core/jwt_signer.dart';
 import '../core/maintenance_controller.dart';
 import '../core/update_check.dart';
+import 'update_dialog.dart';
 
 /// 密钥库输入仅存在弹窗内存，保存后释放密码文本与文件字节。
 class SettingsDialog extends StatefulWidget {
@@ -23,6 +24,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
   final password = TextEditingController(),
       keyPassword = TextEditingController(),
       alias = TextEditingController();
+  // GitHub 加速站前缀，输入即持久化，应用内更新下载时使用。
+  final proxy = TextEditingController();
+  final proxyStore = GithubProxyStore();
   Uint8List? keyBytes;
   String fileName = '', error = '';
   bool saving = false, checkingUpdate = false;
@@ -34,6 +38,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
     bucket.text = value.bucket;
     login.text = value.loginNo;
     channel.text = value.channel;
+    proxy.addListener(() => proxyStore.save(proxy.text));
+    proxyStore.load().then((saved) {
+      if (mounted) proxy.text = saved;
+    });
   }
 
   @override
@@ -46,6 +54,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
       password,
       keyPassword,
       alias,
+      proxy,
     ]) {
       field.clear();
       field.dispose();
@@ -113,43 +122,32 @@ class _SettingsDialogState extends State<SettingsDialog> {
     }
   }
 
-  /// 查询 GitHub 最新 Release；发现新版本时弹窗展示更新说明并可前往下载。
+  /// 查询 GitHub 最新 Release；发现新版本时进入统一更新流程（应用内下载或浏览器下载）。
   Future<void> checkUpdate() async {
     setState(() => checkingUpdate = true);
     try {
       final update = await checkLatestRelease();
       if (!mounted) return;
-      await showDialog<void>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: Text(update == null ? '已是最新版本' : '发现新版本 v${update.version}'),
-          content: SizedBox(
-            width: 480,
-            child: SingleChildScrollView(
-              child: SelectableText(
-                update == null
-                    ? '当前版本 v$appVersion 已是最新。'
-                    : update.notes.isEmpty
-                    ? '新版本已发布，可前往下载。'
-                    : update.notes,
-                style: const TextStyle(fontSize: 13, height: 1.7),
-              ),
+      if (update != null) {
+        await showUpdateDialog(context, update);
+      } else {
+        await showDialog<void>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('已是最新版本'),
+            content: Text(
+              '当前版本 v$appVersion 已是最新。',
+              style: const TextStyle(fontSize: 13, height: 1.7),
             ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('关闭'),
+              ),
+            ],
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('关闭'),
-            ),
-            if (update != null)
-              FilledButton.icon(
-                onPressed: () => launchUrl(Uri.parse(update.url)),
-                icon: const Icon(Icons.download_outlined, size: 18),
-                label: const Text('前往下载'),
-              ),
-          ],
-        ),
-      );
+        );
+      }
     } catch (exception) {
       if (mounted) {
         setState(() {
@@ -245,6 +243,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
               ),
             ),
             const Divider(height: 28),
+            _field(
+              proxy,
+              'GitHub 加速站（可选）',
+              hint: 'https://ghproxy.net/ （留空直连，仅影响更新下载）',
+            ),
             Row(
               children: [
                 const Text(

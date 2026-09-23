@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- 原生查询后台需要网络权限；文件导入导出使用系统选择器。 -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 应用内更新下载 APK 后调起系统安装器需要该权限（Android 8+）。 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <application
         android:allowBackup="false"
         android:label="无纸化维护中心"

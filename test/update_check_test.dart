@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -81,6 +82,92 @@ void main() {
         ),
         throwsA(isA<FormatException>()),
       );
+    });
+  });
+
+  group('附件挑选与加速站', () {
+    /// 模拟一次四端 Release 的附件清单，命名与 CI 发布约定一致。
+    final assets = [
+      const ReleaseAsset(
+        name: 'NPL-Console-v9.9.9-android-release.apk',
+        downloadUrl: 'https://github.com/x/android.apk',
+        size: 100,
+      ),
+      const ReleaseAsset(
+        name: 'NPL-Console-v9.9.9-macos-universal.dmg',
+        downloadUrl: 'https://github.com/x/macos.dmg',
+        size: 200,
+      ),
+      const ReleaseAsset(
+        name: 'NPL-Console-v9.9.9-windows-x64-selfsigned.zip',
+        downloadUrl: 'https://github.com/x/win.zip',
+        size: 300,
+      ),
+      const ReleaseAsset(
+        name: 'NPL-Console-v9.9.9-ios-unsigned.ipa',
+        downloadUrl: 'https://github.com/x/ios.ipa',
+        size: 400,
+      ),
+    ];
+
+    test('按平台匹配对应附件', () {
+      expect(
+        selectAssetForPlatform(TargetPlatform.android, assets)!.name,
+        endsWith('-android-release.apk'),
+      );
+      expect(
+        selectAssetForPlatform(TargetPlatform.macOS, assets)!.name,
+        endsWith('-macos-universal.dmg'),
+      );
+      expect(
+        selectAssetForPlatform(TargetPlatform.windows, assets)!.name,
+        endsWith('-windows-x64-selfsigned.zip'),
+      );
+    });
+
+    test('iOS、不支持的平台与无匹配附件时返回 null', () {
+      expect(selectAssetForPlatform(TargetPlatform.iOS, assets), isNull);
+      expect(selectAssetForPlatform(TargetPlatform.linux, assets), isNull);
+      expect(selectAssetForPlatform(TargetPlatform.android, const []), isNull);
+    });
+
+    test('加速站前缀改写下载地址，空前缀原样返回', () {
+      const url = 'https://github.com/kiliter/npl-console/releases/download/v1/a.apk';
+      expect(applyProxyPrefix(url, ''), url);
+      expect(applyProxyPrefix(url, '   '), url);
+      expect(
+        applyProxyPrefix(url, 'https://ghproxy.net/'),
+        'https://ghproxy.net/$url',
+      );
+    });
+
+    test('Release 解析带出附件清单，结构异常条目被跳过', () async {
+      final client = MockClient(
+        (request) async => http.Response.bytes(
+          utf8.encode(
+            jsonEncode({
+              'tag_name': 'v9.9.9',
+              'html_url': 'https://x',
+              'assets': [
+                {
+                  'name': 'NPL-Console-v9.9.9-android-release.apk',
+                  'browser_download_url': 'https://dl/apk',
+                  'size': 123,
+                },
+                {'name': '缺少下载地址的条目'},
+              ],
+            }),
+          ),
+          200,
+        ),
+      );
+      final update = await checkLatestRelease(
+        client: client,
+        currentVersion: '1.2.0',
+      );
+      expect(update!.assets, hasLength(1));
+      expect(update.assets.single.size, 123);
+      expect(update.assets.single.downloadUrl, 'https://dl/apk');
     });
   });
 }

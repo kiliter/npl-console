@@ -1,19 +1,37 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 /// 应用当前版本；发布新版本时与 pubspec.yaml 的 version 字段同步修改。
-const appVersion = '1.2.0';
+const appVersion = '1.3.0';
 
 /// GitHub 发布仓库（所有者/仓库名），正式包由 CI 推送到该仓库 Release。
 const releaseRepo = 'kiliter/npl-console';
 
+/// GitHub Release 的一个附件（安装包）。
+class ReleaseAsset {
+  final String name, downloadUrl;
+
+  /// 附件字节数；服务端未给出时为 0。
+  final int size;
+  const ReleaseAsset({
+    required this.name,
+    required this.downloadUrl,
+    required this.size,
+  });
+}
+
 /// 一次检查更新的结果，仅在发现更新版本时返回。
 class UpdateInfo {
   final String version, url, notes;
+
+  /// 该 Release 的附件清单，用于按平台挑选可应用内安装的安装包。
+  final List<ReleaseAsset> assets;
   const UpdateInfo({
     required this.version,
     required this.url,
     required this.notes,
+    this.assets = const [],
   });
 }
 
@@ -35,6 +53,54 @@ int compareVersions(String a, String b) {
     if (x != y) return x - y;
   }
   return 0;
+}
+
+/// 按运行平台从 Release 附件中挑选安装包；iOS（未签名 IPA 无法自安装）
+/// 与没有匹配附件时返回 null，由调用方回退到浏览器下载。
+/// 附件命名约定见 .github/workflows/release.yml。
+ReleaseAsset? selectAssetForPlatform(
+  TargetPlatform platform,
+  List<ReleaseAsset> assets,
+) {
+  final suffix = switch (platform) {
+    TargetPlatform.android => '-android-release.apk',
+    TargetPlatform.macOS => '-macos-universal.dmg',
+    TargetPlatform.windows => '-windows-x64-selfsigned.zip',
+    _ => null,
+  };
+  if (suffix == null) return null;
+  for (final asset in assets) {
+    if (asset.name.endsWith(suffix)) return asset;
+  }
+  return null;
+}
+
+/// 把 GitHub 附件下载地址改写为加速站地址；前缀为空时原样返回。
+/// 加速站通常以前缀拼接方式代理，如 https://ghproxy.net/https://github.com/...
+String applyProxyPrefix(String url, String proxyPrefix) {
+  final prefix = proxyPrefix.trim();
+  if (prefix.isEmpty) return url;
+  return '$prefix$url';
+}
+
+/// 解析 Release JSON 中的附件清单；结构异常的条目直接跳过。
+List<ReleaseAsset> _parseAssets(Object? raw) {
+  final assets = <ReleaseAsset>[];
+  if (raw is! List) return assets;
+  for (final item in raw) {
+    if (item is Map &&
+        item['name'] is String &&
+        item['browser_download_url'] is String) {
+      assets.add(
+        ReleaseAsset(
+          name: item['name'] as String,
+          downloadUrl: item['browser_download_url'] as String,
+          size: item['size'] is int ? item['size'] as int : 0,
+        ),
+      );
+    }
+  }
+  return assets;
 }
 
 /// 查询 GitHub 最新 Release：有更新版本返回 UpdateInfo，已是最新返回 null。
@@ -67,6 +133,7 @@ Future<UpdateInfo?> checkLatestRelease({
       url:
           '${decoded['html_url'] ?? 'https://github.com/$releaseRepo/releases/latest'}',
       notes: '${decoded['body'] ?? ''}'.trim(),
+      assets: _parseAssets(decoded['assets']),
     );
   } finally {
     if (client == null) httpClient.close();
