@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 /// GitHub 加速站前缀的持久化存取；前缀为空表示直连 GitHub。
 /// 加速站以前缀拼接方式代理下载地址，仅作用于 Release 附件下载。
@@ -75,10 +76,18 @@ Future<void> downloadRelease({
   }
 }
 
-/// 选择下载保存目录：Android 放临时目录（安装器可直接读取），
-/// 桌面端放系统下载目录，取不到时退回临时目录。
+/// 选择下载保存目录。
+/// macOS 正式包启用系统沙盒，直接写 ~/Downloads、spawn 进程均被拒绝，
+/// 因此 macOS 保存到应用支持目录（沙盒内可写）；Android 放临时目录；
+/// Windows 无沙盒，优先放系统下载目录，取不到时退回临时目录。
 Future<Directory> downloadDirectory() async {
   if (Platform.isAndroid) return getTemporaryDirectory();
+  if (Platform.isMacOS) {
+    final support = await getApplicationSupportDirectory();
+    final dir = Directory('${support.path}${Platform.pathSeparator}updates');
+    if (!dir.existsSync()) await dir.create(recursive: true);
+    return dir;
+  }
   final downloads = await getDownloadsDirectory();
   return downloads ?? getTemporaryDirectory();
 }
@@ -95,10 +104,10 @@ Future<String> launchInstaller(String filePath) async {
     return '已调起系统安装器，请按提示完成安装。';
   }
   if (Platform.isMacOS) {
-    final result = await Process.run('open', [filePath]);
-    if (result.exitCode != 0) {
-      throw FormatException('无法打开磁盘映像：${result.stderr}');
-    }
+    // 沙盒内不能 spawn 进程（Process.run('open') 会被拒绝），
+    // 改用 url_launcher，底层走系统 LaunchServices，沙盒允许。
+    final opened = await launchUrl(Uri.file(filePath));
+    if (!opened) throw const FormatException('无法打开磁盘映像');
     return '已打开磁盘映像，请将应用拖入「应用程序」完成更新。';
   }
   if (Platform.isWindows) {

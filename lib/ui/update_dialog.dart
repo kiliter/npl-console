@@ -111,12 +111,13 @@ Future<void> _downloadAndInstall(
       token: token,
       onProgress: (received, total) => progress.value = (received, total),
     );
-    hint = await launchInstaller(path);
+    // 拉起安装兜底 30 秒超时，防止平台调用卡死导致进度弹窗停在 100%。
+    hint = await launchInstaller(path).timeout(const Duration(seconds: 30));
   } on FormatException catch (exception) {
     // 用户主动取消不算失败，不展示错误。
     if (!token.cancelled) error = exception.message;
-  } catch (_) {
-    error = '下载失败，请检查网络或加速站配置后重试。';
+  } catch (exception) {
+    error = '下载或启动安装失败：$exception';
   }
 
   progress.dispose();
