@@ -26,7 +26,7 @@ class MaintenanceApp extends StatelessWidget {
         onSecondaryContainer: const Color(0xff2869e8),
         primary: const Color(0xff2869e8),
       ),
-      scaffoldBackgroundColor: const Color(0xfff3f6fb),
+      scaffoldBackgroundColor: const Color(0xfff3f6fa),
       fontFamily: '.AppleSystemUIFont',
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(

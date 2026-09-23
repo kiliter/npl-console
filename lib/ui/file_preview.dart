@@ -57,6 +57,9 @@ class FilePreview extends StatefulWidget {
   final MessageSession? messageSession;
   final VoidCallback? onDownload;
   final VoidCallback? onRefresh;
+
+  /// 上传修复入口（危险操作），仅在「单据 PDF」页由上层传入。
+  final VoidCallback? onUpload;
   final int initialPage;
   const FilePreview({
     super.key,
@@ -67,6 +70,7 @@ class FilePreview extends StatefulWidget {
     this.messageSession,
     this.onDownload,
     this.onRefresh,
+    this.onUpload,
     this.initialPage = 1,
   });
   @override
@@ -122,6 +126,12 @@ class _FilePreviewState extends State<FilePreview> {
                 onPressed: widget.onRefresh,
                 icon: const Icon(Icons.refresh, size: 20),
               ),
+            if (widget.onUpload != null)
+              IconButton(
+                tooltip: '上传修复文件到 OBS',
+                onPressed: widget.onUpload,
+                icon: const Icon(Icons.upload_file_outlined, size: 20),
+              ),
             if (widget.onDownload != null)
               IconButton(
                 tooltip: '下载文件',
@@ -148,6 +158,7 @@ class _FilePreviewState extends State<FilePreview> {
                       messageSession: session,
                       onDownload: widget.onDownload,
                       onRefresh: widget.onRefresh,
+                      onUpload: widget.onUpload,
                       initialPage: pdfPage,
                     ),
                   );

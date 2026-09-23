@@ -1,0 +1,4 @@
+interface:
+  display_name: "npl-troubleshoot"
+  short_description: "检索无纸化故障经验，逐步记录排查证据，经人工确认后沉淀案例和流程"
+  default_prompt: "使用 $npl-troubleshoot 按历史经验排查这份工单，记录每一步证据，并在我确认后沉淀案例。"

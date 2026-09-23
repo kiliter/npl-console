@@ -6,18 +6,39 @@ import 'contracts.dart';
 import 'jwt_signer.dart';
 import 'query_cache.dart';
 import 'key_vault.dart';
+import 'request_log_store.dart';
 
 /// 内存接口记录，绝不记录认证头、密钥或文件字节。
 class CallLog {
   final DateTime time = DateTime.now();
   final String url, requestBody;
   final bool binary;
+
+  /// 非默认的 Content-Type（目前仅 multipart 上传使用），为空时按 binary 推导。
+  final String? contentType;
   String state = '请求中', response = '';
   int? status;
-  CallLog(this.url, this.requestBody, this.binary);
+  CallLog(this.url, this.requestBody, this.binary, {this.contentType});
+
+  /// 接口中文名，按请求路径识别；baseUrl 可能带上下文路径，故按结尾匹配，未知路径退回原始路径。
+  String get label {
+    final path = Uri.parse(url).path;
+    for (final type in Category.values) {
+      if (path.endsWith(type.endpoint)) return '${type.label}查询';
+    }
+    if (path.endsWith(MaintenanceController.obsEndpoint)) return 'OBS 文件读取';
+    if (path.endsWith(MaintenanceController.obsUploadEndpoint)) {
+      return 'OBS 文件上传';
+    }
+    if (path.endsWith(MaintenanceController.bizDownloadEndpoint)) {
+      return '全量报文下载';
+    }
+    return path;
+  }
+
   String get detail =>
-      '时间：$time\nURL：$url\n方法：POST\n'
-      'Content-Type：${binary ? 'application/x-www-form-urlencoded' : 'application/json'}\n'
+      '时间：$time\n接口：$label\nURL：$url\n方法：POST\n'
+      'Content-Type：${contentType ?? (binary ? 'application/x-www-form-urlencoded' : 'application/json')}\n'
       '认证：kkk / agAuthorization（不展示凭据）\n\n请求：\n$requestBody\n\n'
       '状态：$state / HTTP ${status ?? '—'}\n响应：\n$response';
 }
@@ -25,12 +46,17 @@ class CallLog {
 /// 业务状态集中管理；视图与平台 I/O 分离，桌面及手机共用只读查询链路。
 class MaintenanceController extends ChangeNotifier {
   static const obsEndpoint = '/test/un_look';
+
+  /// 上传接口（TestController#upload2Obs）是危险写操作，不走只读白名单与缓存层，
+  /// 由 uploadFile 独立构造 multipart 请求，且必须先完成本地备份与多级确认。
+  static const obsUploadEndpoint = '/test/look';
   static const bizDownloadEndpoint = '/agapi/biz/downloadBiz';
   final http.Client Function() clientFactory;
   final String Function()? testToken;
   ConnectionSettings settings = const ConnectionSettings();
   JwtSigner? signer;
   final KeyVault keyVault;
+  final RequestLogStore logStore;
   bool keyPersisted = false;
   int _keyRevision = 0;
   List<Record> works = [], linkedRecords = [];
@@ -53,9 +79,16 @@ class MaintenanceController extends ChangeNotifier {
     http.Client Function()? clientFactory,
     this.testToken,
     this.keyVault = const KeyVault(),
-  }) : clientFactory = clientFactory ?? http.Client.new;
+    RequestLogStore? logStore,
+  }) : clientFactory = clientFactory ?? http.Client.new,
+       logStore = logStore ?? RequestLogStore();
 
   Future<void> restore() async {
+    // 启动即建立日志文件，可在发起第一条请求前确认实际保存位置。
+    await logStore.append({
+      'event': 'session_start',
+      'time': DateTime.now().toIso8601String(),
+    });
     final revision = _keyRevision;
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -260,6 +293,7 @@ class MaintenanceController extends ChangeNotifier {
               .join('&')
         : jsonEncode(body);
     final log = CallLog(uri.toString(), payload, binary);
+    final elapsed = Stopwatch()..start();
     logs.insert(0, log);
     notifyListeners();
     final client = _client!;
@@ -278,7 +312,8 @@ class MaintenanceController extends ChangeNotifier {
         await client.send(request),
       ).timeout(const Duration(seconds: 60));
       log.status = response.statusCode;
-      log.response = binary && response.statusCode == 200
+      log.response =
+          binary && response.statusCode >= 200 && response.statusCode < 300
           ? '二进制文件 · ${response.bodyBytes.length} 字节 · ${response.headers['content-type'] ?? '未声明类型'}'
           : utf8.decode(response.bodyBytes, allowMalformed: true);
       if (ticket != _generation) throw const _Cancelled();
@@ -293,6 +328,24 @@ class MaintenanceController extends ChangeNotifier {
       if (ticket != _generation) throw const _Cancelled();
       rethrow;
     } finally {
+      elapsed.stop();
+      // 完整文本用于后续字段体积分析；文件响应仅记录大小与类型，不写二进制。
+      // 显式挑选字段，避免将包含 JWT 的 request.headers 序列化到磁盘。
+      await logStore.append({
+        'event': 'request_complete',
+        'time': log.time.toIso8601String(),
+        'label': log.label,
+        'method': 'POST',
+        'url': log.url,
+        'contentType': binary
+            ? 'application/x-www-form-urlencoded;charset=UTF-8'
+            : 'application/json',
+        'requestBody': log.requestBody,
+        'status': log.status,
+        'state': log.state,
+        'durationMs': elapsed.elapsedMilliseconds,
+        'response': log.response,
+      });
       notifyListeners();
     }
   }
@@ -403,7 +456,8 @@ class MaintenanceController extends ChangeNotifier {
   }
 
   /// 下载全量报文（WoBizController#downloadBiz）：仅传 caseNo，服务端返回
-  /// {result, data, desc, details}，result 为 0 时 data 即全量报文内容。
+  /// {result, data, desc, details}，result 为 0 时 data 即全量报文内容；
+  /// data 是被转义的 JSON 字符串，且可能嵌套多层 {result, data} 信封，需逐层还原。
   /// 结果由调用方保存为文件；不使用 _start()，避免清空当前预览内容。
   Future<String> downloadFullBiz() async {
     final selected = work;
@@ -426,11 +480,9 @@ class MaintenanceController extends ChangeNotifier {
     message = '正在下载全量报文…';
     notifyListeners();
     try {
-      final response = await _networkRequest(
-        bizDownloadEndpoint,
-        {'caseNo': '${selected['caseNo'] ?? ''}'},
-        ticket,
-      );
+      final response = await _networkRequest(bizDownloadEndpoint, {
+        'caseNo': '${selected['caseNo'] ?? ''}',
+      }, ticket);
       if (ticket != _generation) throw const _Cancelled();
       final decoded = jsonDecode(utf8.decode(response.bodyBytes));
       if (decoded is! Map) {
@@ -438,11 +490,38 @@ class MaintenanceController extends ChangeNotifier {
       }
       // 后端成功分支写数字 0，参数校验失败分支写字符串 "1"，统一按文本比较。
       if ('${decoded['result']}' != '0') {
-        throw FormatException(
-          '下载全量报文失败：${decoded['desc'] ?? '服务端未说明原因'}',
-        );
+        throw FormatException('下载全量报文失败：${decoded['desc'] ?? '服务端未说明原因'}');
       }
-      final data = '${decoded['data'] ?? ''}';
+      // data 是被转义的 JSON 字符串，服务端可能把整包响应再嵌进 data，
+      // 逐层还原：字符串且形似 JSON 就继续 decode；解出接口信封就继续取 data，
+      // 直到拿到真正的报文内容；非 JSON 内容（如 XML 报文）保持原文不受影响。
+      // 信封判定必须同时具备 result/data 及 desc 或 details 键，
+      // 避免把业务报文自身的 result/data 字段误当信封拆掉（会导致内容缺失）。
+      bool isEnvelope(Map content) =>
+          content.containsKey('result') &&
+          content.containsKey('data') &&
+          (content.containsKey('desc') || content.containsKey('details'));
+      Object? content = decoded['data'];
+      for (var i = 0; i < 4; i++) {
+        if (content is String) {
+          final text = content.trim();
+          if (!text.startsWith('{') && !text.startsWith('[')) break;
+          try {
+            content = jsonDecode(text);
+          } catch (_) {
+            break;
+          }
+          continue;
+        }
+        if (content is Map && isEnvelope(content)) {
+          content = content['data'];
+          continue;
+        }
+        break;
+      }
+      if (content == null) throw const FormatException('服务端返回的全量报文为空');
+      // 还原出 Map/List 时重新序列化为 JSON 文本，避免 Dart toString 的伪 JSON 交给解析器。
+      final data = content is String ? content : jsonEncode(content);
       if (data.isEmpty) throw const FormatException('服务端返回的全量报文为空');
       busy = false;
       error = false;
@@ -454,6 +533,116 @@ class MaintenanceController extends ChangeNotifier {
       if (ticket != _generation) throw const _Cancelled();
       _fail(exception);
       throw FormatException(_errorText(exception));
+    }
+  }
+
+  /// 上传本地文件到 OBS（TestController#upload2Obs，POST /test/look）。
+  /// 危险写操作：不经过 request() 缓存层与只读白名单，独立构造 multipart 请求；
+  /// 调用方必须先完成本地备份与多级确认。成功返回，失败抛出 FormatException。
+  /// 不使用 _start()，避免清空当前预览内容；日志只记录字段参数与文件名、大小，
+  /// 绝不记录文件字节。
+  Future<void> uploadFile(
+    String fileName,
+    Uint8List bytes,
+    String bucketName,
+    String objectName,
+    String ext8,
+  ) async {
+    if (bytes.isEmpty) throw const FormatException('所选文件为空，无法上传');
+    if (bucketName.trim().isEmpty || objectName.trim().isEmpty) {
+      throw const FormatException('OBS 桶与对象名不能为空');
+    }
+    try {
+      settings.validate();
+      if (signer == null && testToken == null) {
+        throw const FormatException('请先导入密钥库');
+      }
+    } on FormatException catch (exception) {
+      _fail(exception);
+      rethrow;
+    }
+    final ticket = _generation;
+    _client ??= clientFactory();
+    busy = true;
+    error = false;
+    message = '正在上传 $fileName 到 OBS…';
+    notifyListeners();
+    final token =
+        testToken?.call() ?? signer!.token(settings.loginNo, settings.channel);
+    final uri = Uri.parse(
+      '${settings.baseUrl.replaceAll(RegExp(r'/+$'), '')}$obsUploadEndpoint',
+    );
+    final log = CallLog(
+      uri.toString(),
+      jsonEncode({
+        'bucketName': bucketName,
+        'objectName': objectName,
+        'ext8': ext8,
+        'file': '$fileName（${bytes.length} 字节）',
+      }),
+      true,
+      contentType: 'multipart/form-data',
+    );
+    final elapsed = Stopwatch()..start();
+    logs.insert(0, log);
+    notifyListeners();
+    final client = _client!;
+    try {
+      final request =
+          http.MultipartRequest('POST', uri)
+            ..followRedirects = false
+            ..headers.addAll({'kkk': token, 'agAuthorization': token})
+            ..fields.addAll({
+              'bucketName': bucketName,
+              'objectName': objectName,
+              'ext8': ext8,
+            })
+            ..files.add(
+              http.MultipartFile.fromBytes('file', bytes, filename: fileName),
+            );
+      final response = await http.Response.fromStream(
+        await client.send(request),
+      ).timeout(const Duration(seconds: 60));
+      log.status = response.statusCode;
+      log.response = utf8.decode(response.bodyBytes, allowMalformed: true);
+      if (ticket != _generation) throw const _Cancelled();
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw FormatException(
+          'HTTP ${response.statusCode}：$obsUploadEndpoint，请查看接口记录',
+        );
+      }
+      // 服务端成功返回纯文本 true；false 表示 JWT 鉴权失败或 OBS 写入失败。
+      if (log.response.trim() != 'true') {
+        throw const FormatException('服务端拒绝上传（返回 false），请检查鉴权配置或查看接口记录');
+      }
+      log.state = '成功';
+      busy = false;
+      error = false;
+      message =
+          '上传成功 · $objectName · ${(bytes.length / 1024).toStringAsFixed(1)} KB';
+      notifyListeners();
+    } catch (exception) {
+      log.state = ticket != _generation ? '已取消' : '失败';
+      if (log.response.isEmpty) log.response = '请求未完成：${exception.runtimeType}';
+      if (ticket != _generation) throw const _Cancelled();
+      _fail(exception);
+      throw FormatException(_errorText(exception));
+    } finally {
+      elapsed.stop();
+      await logStore.append({
+        'event': 'request_complete',
+        'time': log.time.toIso8601String(),
+        'label': log.label,
+        'method': 'POST',
+        'url': log.url,
+        'contentType': 'multipart/form-data',
+        'requestBody': log.requestBody,
+        'status': log.status,
+        'state': log.state,
+        'durationMs': elapsed.elapsedMilliseconds,
+        'response': log.response,
+      });
+      notifyListeners();
     }
   }
 
@@ -515,12 +704,7 @@ class MaintenanceController extends ChangeNotifier {
       // 选中时由 loadAsset 改走 downloadBiz 接口，默认仍加载首份留存报文。
       if (type == Category.message) {
         assets.add(
-          Asset(
-            '${work!['caseNo']}_全量报文.json',
-            '全量报文',
-            'fullbiz',
-            work!,
-          ),
+          Asset('${work!['caseNo']}_全量报文.json', '全量报文', 'fullbiz', work!),
         );
       }
       if (assets.isEmpty) {
@@ -595,8 +779,7 @@ class MaintenanceController extends ChangeNotifier {
       contentType = detectType(data, 'text');
       bytes = data;
       busy = false;
-      message =
-          '全量报文加载完成 · ${(data.length / 1024).toStringAsFixed(1)} KB';
+      message = '全量报文加载完成 · ${(data.length / 1024).toStringAsFixed(1)} KB';
       notifyListeners();
     } on FormatException {
       // downloadFullBiz 已更新状态条，此处不重复处理。

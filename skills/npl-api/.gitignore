@@ -1,0 +1,4 @@
+# 本地运行产物不随 Skill 源码提交。
+__pycache__/
+*.pyc
+.venv/

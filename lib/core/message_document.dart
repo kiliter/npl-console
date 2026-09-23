@@ -104,6 +104,57 @@ class MessageDocument {
   bool get structured => format != 'text';
 }
 
+/// 从 start 处的 { 或 [ 开始按 JSON 词法做括号配平（尊重字符串与转义），
+/// 返回配对闭合符的下标；配平失败返回 -1。
+int _jsonBraceEnd(String s, int start) {
+  var depth = 0, i = start;
+  var inString = false, escaped = false;
+  while (i < s.length) {
+    final c = s[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (c == r'\') {
+        escaped = true;
+      } else if (c == '"') {
+        inString = false;
+      }
+    } else {
+      if (c == '"') {
+        inString = true;
+      } else if (c == '{' || c == '[') {
+        depth++;
+      } else if (c == '}' || c == ']') {
+        depth--;
+        if (depth == 0) return i;
+      }
+    }
+    i++;
+  }
+  return -1;
+}
+
+/// 修复服务端把 JSON 原文未转义直接嵌进字符串值的非法 JSON，
+/// 如 {"reqData":"{...}"}：找到 "key":"{ 形态的嵌入点，括号配平后整段转义为合法字符串。
+/// 每次修复后重新扫描，最多处理 10 处；原文不会被修改，仅用于解析。
+String repairEmbeddedJson(String input) {
+  var text = input;
+  final pattern = RegExp(r'"\s*:\s*"(?=[{\[])');
+  for (var n = 0; n < 10; n++) {
+    final match = pattern.firstMatch(text);
+    if (match == null) break;
+    final quote = match.end - 1; // 值的开头引号
+    final end = _jsonBraceEnd(text, match.end);
+    if (end < 0 || end + 1 >= text.length || text[end + 1] != '"') break;
+    text = text.replaceRange(
+      quote,
+      end + 2,
+      jsonEncode(text.substring(match.end, end + 1)),
+    );
+  }
+  return text;
+}
+
 /// 自动识别 JSON/XML；显式选择格式时返回解析错误，原文始终可查看。
 MessageDocument parseMessage(Object? input, {String mode = 'auto'}) {
   final raw = MessageNode('根节点', '', input).source;
@@ -135,6 +186,20 @@ MessageDocument parseMessage(Object? input, {String mode = 'auto'}) {
       }
       return MessageDocument('json', raw, MessageNode('根节点', '', data));
     } catch (error) {
+      // 服务端常见缺陷：把 JSON 原文未转义嵌进字符串值（如 reqData）。
+      // 修复后再解析一次，结构化视图不受影响，原文仍按 source 原样展示。
+      if (mode == 'auto') {
+        final repaired = repairEmbeddedJson(raw);
+        if (repaired != raw) {
+          try {
+            return MessageDocument(
+              'json',
+              raw,
+              MessageNode('根节点', '', jsonDecode(repaired)),
+            );
+          } catch (_) {}
+        }
+      }
       if (mode == 'json') {
         return MessageDocument(
           'text',

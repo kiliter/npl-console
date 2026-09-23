@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../core/breakpoints.dart';
 import '../core/contracts.dart';
 
 /// WO_INFO 实际列对应的 JSON 属性，依据用户提供的 WO_INFO202610 建表语句，共 62 列。
@@ -195,6 +196,80 @@ class _WorkDetailsState extends State<WorkDetails> {
       : v is Map || v is List
       ? const JsonEncoder.withIndent('  ').convert(v)
       : '$v';
+
+  /// 单个字段行：标签（中文 · key）+ 复制按钮 + 可选中值。
+  Widget fieldRow(MapEntry<String, dynamic> e) => Container(
+    padding: const EdgeInsets.symmetric(vertical: 9),
+    decoration: const BoxDecoration(
+      border: Border(bottom: BorderSide(color: Color(0xffedf1f6))),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                '${fieldLabels[e.key] ?? e.key}${fieldLabels.containsKey(e.key) ? ' · ${e.key}' : ''}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Color(0xff8192a9), fontSize: 10),
+              ),
+            ),
+            SizedBox(
+              height: 24,
+              width: 28,
+              child: IconButton(
+                padding: EdgeInsets.zero,
+                tooltip: '复制 ${e.key}',
+                onPressed: () {
+                  Clipboard.setData(
+                    ClipboardData(text: e.value == null ? 'null' : value(e.value)),
+                  );
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('字段内容已复制'),
+                      duration: Duration(seconds: 1),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.copy_outlined, size: 14),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        SelectableText(
+          value(e.value),
+          style: TextStyle(
+            fontSize: 12,
+            height: 1.55,
+            color: e.value == null
+                ? const Color(0xffa4afbf)
+                : const Color(0xff1b2b42),
+          ),
+        ),
+      ],
+    ),
+  );
+
+  /// 字段网格：移动端单列；桌面端按屏宽 3 / 4 列等宽铺开（原型一屏密度）。
+  Widget fieldGrid(List<MapEntry<String, dynamic>> fields) => LayoutBuilder(
+    builder: (context, size) {
+      final cols = detailColumns(MediaQuery.sizeOf(context).width);
+      if (cols <= 1) {
+        return Column(children: [for (final e in fields) fieldRow(e)]);
+      }
+      const gap = 20.0;
+      final w = (size.maxWidth - (cols - 1) * gap) / cols;
+      return Wrap(
+        spacing: gap,
+        children: [
+          for (final e in fields) SizedBox(width: w, child: fieldRow(e)),
+        ],
+      );
+    },
+  );
   @override
   Widget build(BuildContext context) {
     final entries = woInfoFields(widget.record).entries.toList();
@@ -220,7 +295,7 @@ class _WorkDetailsState extends State<WorkDetails> {
       child: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.fromLTRB(14, 12, 6, 12),
             child: Column(
               children: [
                 Row(
@@ -274,7 +349,7 @@ class _WorkDetailsState extends State<WorkDetails> {
           const Divider(height: 1),
           Expanded(
             child: ListView(
-              padding: const EdgeInsets.fromLTRB(18, 8, 18, 24),
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 18),
               children: [
                 if (matches.isEmpty)
                   const Padding(
@@ -289,7 +364,7 @@ class _WorkDetailsState extends State<WorkDetails> {
                           : collapsed.add(group.key),
                     ),
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      padding: const EdgeInsets.symmetric(vertical: 10),
                       child: Row(
                         children: [
                           Container(
@@ -303,6 +378,7 @@ class _WorkDetailsState extends State<WorkDetails> {
                               group.key,
                               style: const TextStyle(
                                 fontWeight: FontWeight.w600,
+                                fontSize: 13,
                               ),
                             ),
                           ),
@@ -324,73 +400,7 @@ class _WorkDetailsState extends State<WorkDetails> {
                     ),
                   ),
                   if (!collapsed.contains(group.key) || filter.isNotEmpty)
-                    for (final e in group.value)
-                      Container(
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        decoration: const BoxDecoration(
-                          border: Border(
-                            bottom: BorderSide(color: Color(0xffedf1f6)),
-                          ),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    '${fieldLabels[e.key] ?? e.key}${fieldLabels.containsKey(e.key) ? ' · ${e.key}' : ''}',
-                                    style: const TextStyle(
-                                      color: Color(0xff8192a9),
-                                      fontSize: 11,
-                                    ),
-                                  ),
-                                ),
-                                SizedBox(
-                                  height: 25,
-                                  width: 30,
-                                  child: IconButton(
-                                    padding: EdgeInsets.zero,
-                                    tooltip: '复制 ${e.key}',
-                                    onPressed: () {
-                                      Clipboard.setData(
-                                        ClipboardData(
-                                          text: e.value == null
-                                              ? 'null'
-                                              : value(e.value),
-                                        ),
-                                      );
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showSnackBar(
-                                        const SnackBar(
-                                          content: Text('字段内容已复制'),
-                                          duration: Duration(seconds: 1),
-                                        ),
-                                      );
-                                    },
-                                    icon: const Icon(
-                                      Icons.copy_outlined,
-                                      size: 14,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 5),
-                            SelectableText(
-                              value(e.value),
-                              style: TextStyle(
-                                fontSize: 13,
-                                height: 1.65,
-                                color: e.value == null
-                                    ? const Color(0xffa4afbf)
-                                    : const Color(0xff1b2b42),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
+                    fieldGrid(group.value),
                 ],
               ],
             ),

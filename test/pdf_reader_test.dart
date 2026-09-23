@@ -40,6 +40,11 @@ void main() {
     await tester.tap(find.byTooltip('放大 PDF'));
     await tester.pumpAndSettle();
     expect(controller.currentZoom, greaterThan(before));
+    // 宽屏（≥900）默认展开缩略图导航，手动可收起再展开。
+    expect(find.byType(PdfPageView), findsNWidgets(3));
+    await tester.tap(find.byTooltip('页面缩略图'));
+    await tester.pumpAndSettle();
+    expect(find.byType(PdfPageView), findsNothing);
     await tester.tap(find.byTooltip('页面缩略图'));
     await tester.pumpAndSettle();
     expect(find.byType(PdfPageView), findsNWidgets(3));

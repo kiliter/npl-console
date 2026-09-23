@@ -222,6 +222,8 @@ void main() {
     expect(jsonDecode(requests.single.body), {'caseNo': 'CASE'});
     expect(controller.error, isFalse);
     expect(controller.logs.single.state, '成功');
+    // 接口记录按路径识别中文名，列表无需点进详情即可区分接口。
+    expect(controller.logs.single.label, '全量报文下载');
     fail = true;
     await expectLater(
       controller.downloadFullBiz(),
@@ -261,6 +263,33 @@ void main() {
     expect(utf8.decode(controller.bytes!), '{"a":1}');
     expect(controller.contentType, 'text');
     expect(controller.asset?.name, 'CASE_全量报文.json');
+    controller.dispose();
+  });
+  test('全量报文 data 嵌套转义信封时逐层还原出真实报文', () async {
+    // 服务端把整包响应再塞进 data：{"result":0,"data":"{\"result\":0,\"data\":\"...\"}"}。
+    final nested = jsonEncode({
+      'result': 0,
+      'data': jsonEncode({
+        'result': 0,
+        'data': jsonEncode({
+          'svcCont': {'orderId': 'ORD-1'},
+        }),
+        'desc': '',
+      }),
+      'desc': '',
+    });
+    final controller = MaintenanceController(
+      clientFactory: () => MockClient((request) async {
+        return http.Response(nested, 200);
+      }),
+      testToken: () => 'test',
+    )..settings = settings;
+    controller.work = {'caseNo': 'CASE'};
+    // 还原后应直接得到真实报文 JSON，而不是带信封的转义字符串。
+    expect(
+      await controller.downloadFullBiz(),
+      '{"svcCont":{"orderId":"ORD-1"}}',
+    );
     controller.dispose();
   });
 }

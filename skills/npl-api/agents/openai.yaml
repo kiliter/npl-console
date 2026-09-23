@@ -1,0 +1,4 @@
+interface:
+  display_name: "npl-api"
+  short_description: "调用无纸化六类查询接口，展开完整报文并屏蔽受理正文，辅助定位业务问题"
+  default_prompt: "使用 $npl-api 查询指定工单并展开全量报文，保留 reqData，只屏蔽 acceptContent。"

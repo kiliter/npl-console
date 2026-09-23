@@ -1,9 +1,11 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../core/contracts.dart';
 import '../core/jwt_signer.dart';
 import '../core/maintenance_controller.dart';
+import '../core/update_check.dart';
 
 /// 密钥库输入仅存在弹窗内存，保存后释放密码文本与文件字节。
 class SettingsDialog extends StatefulWidget {
@@ -23,7 +25,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
       alias = TextEditingController();
   Uint8List? keyBytes;
   String fileName = '', error = '';
-  bool saving = false;
+  bool saving = false, checkingUpdate = false;
   @override
   void initState() {
     super.initState();
@@ -111,6 +113,56 @@ class _SettingsDialogState extends State<SettingsDialog> {
     }
   }
 
+  /// 查询 GitHub 最新 Release；发现新版本时弹窗展示更新说明并可前往下载。
+  Future<void> checkUpdate() async {
+    setState(() => checkingUpdate = true);
+    try {
+      final update = await checkLatestRelease();
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text(update == null ? '已是最新版本' : '发现新版本 v${update.version}'),
+          content: SizedBox(
+            width: 480,
+            child: SingleChildScrollView(
+              child: SelectableText(
+                update == null
+                    ? '当前版本 v$appVersion 已是最新。'
+                    : update.notes.isEmpty
+                    ? '新版本已发布，可前往下载。'
+                    : update.notes,
+                style: const TextStyle(fontSize: 13, height: 1.7),
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('关闭'),
+            ),
+            if (update != null)
+              FilledButton.icon(
+                onPressed: () => launchUrl(Uri.parse(update.url)),
+                icon: const Icon(Icons.download_outlined, size: 18),
+                label: const Text('前往下载'),
+              ),
+          ],
+        ),
+      );
+    } catch (exception) {
+      if (mounted) {
+        setState(() {
+          error = exception is FormatException
+              ? exception.message
+              : '检查更新失败，请检查网络后重试。';
+        });
+      }
+    } finally {
+      if (mounted) setState(() => checkingUpdate = false);
+    }
+  }
+
   /// 移除仅作用于系统保存项，不删除用户导入的原始文件。
   Future<void> removeKey() async {
     setState(() {
@@ -191,6 +243,21 @@ class _SettingsDialogState extends State<SettingsDialog> {
                 color: Color(0xff8090a5),
                 height: 1.6,
               ),
+            ),
+            const Divider(height: 28),
+            Row(
+              children: [
+                const Text(
+                  '当前版本 v$appVersion',
+                  style: TextStyle(fontSize: 12, color: Color(0xff8090a5)),
+                ),
+                const Spacer(),
+                TextButton.icon(
+                  onPressed: saving || checkingUpdate ? null : checkUpdate,
+                  icon: const Icon(Icons.system_update_alt, size: 18),
+                  label: Text(checkingUpdate ? '正在检查…' : '检查更新'),
+                ),
+              ],
             ),
             if (error.isNotEmpty)
               Padding(

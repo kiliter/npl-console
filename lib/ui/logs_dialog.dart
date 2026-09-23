@@ -56,6 +56,18 @@ class LogsDialogState extends State<LogsDialog> {
                 ),
               ),
               const Divider(height: 1),
+              // 实际落盘路径可直接复制，写入失败时明确展示，避免误以为日志已保存。
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 18,
+                  vertical: 8,
+                ),
+                child: SelectableText(
+                  widget.controller.logStore.error ??
+                      '日志文件：${widget.controller.logStore.path ?? '首次请求后创建'}',
+                  style: const TextStyle(fontSize: 11),
+                ),
+              ),
               if (MediaQuery.sizeOf(context).shortestSide < 600)
                 Expanded(
                   child: Column(
@@ -74,7 +86,7 @@ class LogsDialogState extends State<LogsDialog> {
                                 (log) => DropdownMenuItem(
                                   value: log,
                                   child: Text(
-                                    '${log.state} · ${Uri.parse(log.url).path}',
+                                    '${log.label} · ${log.state}',
                                     overflow: TextOverflow.ellipsis,
                                   ),
                                 ),
@@ -113,12 +125,15 @@ class LogsDialogState extends State<LogsDialog> {
                               child: ListTile(
                                 selected: log == entry,
                                 title: Text(
-                                  '${log.state} · ${log.status ?? '—'}',
-                                  style: const TextStyle(fontSize: 12),
+                                  log.label,
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                  ),
                                 ),
                                 subtitle: Text(
-                                  log.url,
-                                  maxLines: 3,
+                                  '${log.state} · ${log.status ?? '—'}\n${log.url}',
+                                  maxLines: 4,
                                   overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(fontSize: 10),
                                 ),

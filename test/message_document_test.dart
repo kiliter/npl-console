@@ -34,4 +34,16 @@ void main() {
     expect(parseMessage(raw, mode: 'xml').error, isNotNull);
     expect(parseMessage(raw, mode: 'json').source, raw);
   });
+  test('服务端未转义内嵌 JSON（reqData 形态）自动修复后可解析', () {
+    // 真实报文形态：{"reqData":"{"woInfo":{...}}"} 内嵌 JSON 未转义，属非法 JSON。
+    const broken =
+        '{"reqData":"{"woInfo":{"loginNo":"DEMO1"},"list":[{"a":1}]}","regionCode":"13"}';
+    final doc = parseMessage(broken);
+    expect(doc.format, 'json');
+    expect(doc.source, broken); // 原文保持不动
+    final req = doc.root.children.firstWhere((e) => e.name == 'reqData');
+    final inner = parseMessage(req.focusValue);
+    expect(inner.format, 'json');
+    expect(searchMessage(inner.root, key: 'loginNo').single.value, 'DEMO1');
+  });
 }

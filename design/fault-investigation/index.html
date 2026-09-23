@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>故障调查 · 无纸化维护中心</title>
+  <link rel="stylesheet" href="style.css"><script src="app.js" defer></script>
+</head>
+<body>
+  <!-- 独立 HTML 原型：所有业务材料均为模拟，不连接业务接口或模型。 -->
+  <aside class="sidebar">
+    <a class="brand" href="index.html"><span class="brand-mark">N</span><span>无纸化维护中心<small>NPL CONSOLE</small></span></a>
+    <div class="nav-label">工作空间</div>
+    <button class="nav-item" id="workNav"><span>▤</span> 工单查询 <small>演示</small></button>
+    <button class="nav-item active" id="investigationNav"><span>⌖</span> 故障调查 <span class="nav-dot"></span></button>
+    <button class="nav-item" id="sourcesNav"><span>▧</span> 项目与数据源</button>
+    <div class="side-separator"></div>
+    <div class="row between"><span class="nav-label">调查记录</span><button class="icon-button" id="newSide" aria-label="新建调查">＋</button></div>
+    <label class="history-search"><span>⌕</span><input id="historySearch" placeholder="搜索调查记录" aria-label="搜索调查记录"></label>
+    <div id="history"></div>
+    <div class="sidebar-foot"><span class="avatar">维</span><div>运维工作台<small>本地交互预览 · 不连接生产</small></div></div>
+  </aside>
+  <div class="shell">
+    <header class="topbar"><div class="breadcrumb">工作空间 <span>/</span> <strong id="pageName">故障调查</strong></div><div class="row"><span class="demo-badge">模拟演示</span><button class="button" id="newTop">＋ 新建调查</button></div></header>
+    <main>
+      <div class="heading"><div><div class="eyebrow">江苏移动 · 无纸化业务</div><h1 id="title">工单已生成，PDF 无法读取</h1><p id="subtitle">从业务现象出发，让每一项判断都有据可查。</p></div><button class="button" id="export">↓ 导出报告</button></div>
+      <div class="scope-bar"><span><i class="scope-dot"></i> NPL 江苏</span><span class="scope-env" id="envTag">演示环境</span><span class="mono" id="caseTag">DEMO-20260920-0086</span><span>09-20 10:00—10:30 <small>上海时间</small></span><span class="scope-version">◇ 部署版本未核对</span></div>
+      <section id="investigationView">
+        <div class="workspace">
+          <div class="investigation-panel">
+            <div class="panel-toolbar"><div class="tabs" role="tablist"><button class="active" data-tab="timeline" role="tab" aria-selected="true">调查过程</button><button data-tab="evidence" role="tab" aria-selected="false">证据 <span id="evidenceCount">3</span></button><button data-tab="report" role="tab" aria-selected="false">诊断报告</button></div><span id="status" class="status" role="status">待继续调查</span></div>
+            <div id="content" class="panel-content"></div>
+            <div class="composer"><div id="attachmentList" class="attachments"></div><label class="sr-only" for="direction">故障描述或补充方向</label><textarea id="direction" rows="2" placeholder="补充现象、时间或排查方向，例如：同一工单昨天可以正常下载…"></textarea><div class="row between"><div class="row"><button class="icon-button" id="attach" aria-label="添加模拟附件">＋</button><small>附件仅展示文件名，不上传 · ⌘ / Ctrl + Enter</small><input type="file" id="file" multiple hidden accept=".log,.txt,.json,.pdf,.png,.jpg,.jpeg"></div><div class="row"><button class="button danger" id="stop" hidden>停止调查</button><button class="button primary" id="send">继续调查 ↗</button></div></div></div>
+          </div>
+          <aside class="context-panel"><div class="context-title">调查上下文 <span>只读</span></div><div class="context-body"><div class="section-label">关联工单</div><button class="work-card" id="workCard"><span class="file-icon">▤</span><div><strong class="mono" id="contextCase">DEMO-20260920-0086</strong><small>业务办理 / 电子单据</small><span class="mini-badge">模拟工单 · 已生成</span></div><span>↗</span></button><div class="section-label">跨仓库调查范围</div><div class="repo"><span class="repo-icon">JS</span><div><strong>npl-js</strong><small>江苏定制 · 入口与业务实现</small></div></div><div class="repo-connector">↓ 平台依赖</div><div class="repo"><span class="repo-icon platform">BE</span><div><strong>npl-backend</strong><small>平台底座 · 编排与文件处理</small></div></div><div class="notice">本地源码已用于设计分析。原型未连接代码检索服务，部署与依赖版本仍待核对。</div><div class="section-label">证据来源</div><div class="source-row"><span>代码片段</span><span class="subtle">静态参照</span></div><div class="source-row"><span>接口记录 / 业务日志</span><span class="amber-text">模拟材料</span></div><div class="source-row"><span>生产日志服务</span><span class="subtle">未接入</span></div><div class="section-label">调查边界</div><p class="boundary">仅查询与取证，不修改业务数据。配置中心由人工提供脱敏材料。</p></div><div class="context-bottom"><span>◈</span> 结论附带证据与未验证项</div></aside>
+        </div>
+      </section>
+      <section id="sourcesView" hidden></section>
+    </main>
+    <footer>HTML 交互原型 <span>·</span> 全部故障、工单及日志均为模拟 <span>·</span> 尚未调用 Pi 或连接真实数据源</footer>
+  </div>
+  <dialog id="newDialog"><form id="newForm"><div class="dialog-head"><div><small>创建一条可追溯的调查</small><h2>新建故障调查</h2></div><button type="button" class="icon-button" data-close="newDialog" aria-label="关闭">×</button></div><label>业务项目<select name="project"><option>NPL 江苏 · npl-js + npl-backend</option></select></label><div class="form-grid"><label>环境<select name="environment"><option>演示环境</option><option>测试环境（模拟）</option><option>生产环境（模拟）</option></select></label><label>关联单据号<input name="caseNo" value="DEMO-20260920-0086" required maxlength="80"></label></div><label>故障现象<textarea name="problem" required rows="4" maxlength="1000" placeholder="发生了什么？什么时候发生？预期结果是什么？"></textarea></label><p class="notice">本次只模拟调查流程。不会读取本机代码、上传附件或请求业务系统。</p><div class="dialog-actions"><button type="button" class="button" data-close="newDialog">取消</button><button class="button primary" type="submit">创建并模拟调查 ↗</button></div></form></dialog>
+  <dialog id="evidenceDialog" class="evidence-dialog"><div class="dialog-head"><div><small>保留片段 · 调查内证据</small><h2 id="evidenceTitle"></h2></div><button class="icon-button" data-close="evidenceDialog" aria-label="关闭证据">×</button></div><div id="evidenceBody"></div></dialog>
+  <dialog id="workDialog"><div class="dialog-head"><div><small>从工单进入排障</small><h2>工单上下文预览</h2></div><button class="icon-button" data-close="workDialog" aria-label="关闭工单">×</button></div><div class="work-summary"><span>单据号</span><strong id="workCase" class="mono"></strong><span>业务月份</span><strong>202609</strong><span>关联材料</span><strong>工单、接口记录、PDF 读取结果</strong><span>携带方式</span><strong>仅带入选定材料，鉴权密钥不进入调查</strong></div><p class="notice">这是既有工单查询与新调查之间的衔接演示。</p><div class="dialog-actions"><button class="button primary" id="fromWork">以此工单新建调查 ↗</button></div></dialog>
+  <div id="toast" role="status" hidden></div>
+</body>
+</html>

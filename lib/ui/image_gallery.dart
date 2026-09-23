@@ -1,6 +1,6 @@
-import 'dart:math' as math;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import '../core/breakpoints.dart';
 import '../core/maintenance_controller.dart';
 import 'file_preview.dart';
 
@@ -53,22 +53,40 @@ class ImageGallery extends StatelessWidget {
           ),
           Expanded(
             child: LayoutBuilder(
-              builder: (context, size) => GridView.builder(
-                key: const ValueKey('all-images'),
-                padding: const EdgeInsets.all(18),
-                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: size.maxWidth > 850 ? 2 : 1,
-                  mainAxisExtent: math.max(
-                    300,
-                    math.min(470, size.maxHeight - 30),
+              builder: (context, size) {
+                // 桌面端按宽度分列（约 320px 一列，2–5 列）；
+                // 两行内能放下就均分高度、禁止滚动一屏看完，否则紧凑卡片（高 280）滚动。
+                final desktop = !isMobileWidth(
+                  MediaQuery.sizeOf(context).width,
+                );
+                final cols = desktop
+                    ? (size.maxWidth / 320).floor().clamp(2, 5)
+                    : 1;
+                final count = items.length;
+                final rows = count == 0 ? 1 : (count / cols).ceil();
+                const pad = 36.0, gap = 16.0;
+                final fitExtent =
+                    (size.maxHeight - pad - (rows - 1) * gap) / rows;
+                final fillScreen = desktop && rows <= 2 && fitExtent >= 200;
+                return GridView.builder(
+                  key: const ValueKey('all-images'),
+                  padding: const EdgeInsets.all(18),
+                  physics: fillScreen
+                      ? const NeverScrollableScrollPhysics()
+                      : null,
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: cols,
+                    mainAxisExtent: fillScreen
+                        ? fitExtent
+                        : (desktop ? 280 : 300),
+                    crossAxisSpacing: gap,
+                    mainAxisSpacing: gap,
                   ),
-                  crossAxisSpacing: 16,
-                  mainAxisSpacing: 16,
-                ),
-                itemCount: items.length,
-                itemBuilder: (context, index) =>
-                    _card(context, items[index], index),
-              ),
+                  itemCount: count,
+                  itemBuilder: (context, index) =>
+                      _card(context, items[index], index),
+                );
+              },
             ),
           ),
         ],
@@ -86,7 +104,7 @@ class ImageGallery extends StatelessWidget {
     child: Column(
       children: [
         Padding(
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           child: Row(
             children: [
               Expanded(
@@ -94,22 +112,25 @@ class ImageGallery extends StatelessWidget {
                   '${index + 1}. ${item.asset.label}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontWeight: FontWeight.w600),
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 12,
+                  ),
                 ),
               ),
-              IconButton(
+              _cardAction(
                 tooltip: '重试此图片',
                 onPressed: item.loading
                     ? null
                     : () => controller.retryImage(item),
-                icon: const Icon(Icons.refresh, size: 18),
+                icon: Icons.refresh,
               ),
-              IconButton(
+              _cardAction(
                 tooltip: '下载此文件',
                 onPressed: item.bytes == null ? null : () => _save(item),
-                icon: const Icon(Icons.download_outlined, size: 18),
+                icon: Icons.download_outlined,
               ),
-              IconButton(
+              _cardAction(
                 tooltip: '全屏查看此图片',
                 onPressed: item.bytes == null || item.type != 'image'
                     ? null
@@ -123,7 +144,7 @@ class ImageGallery extends StatelessWidget {
                           fullscreen: true,
                         ),
                       ),
-                icon: const Icon(Icons.fullscreen, size: 21),
+                icon: Icons.fullscreen,
               ),
             ],
           ),
@@ -139,7 +160,7 @@ class ImageGallery extends StatelessWidget {
                   ),
                 )
               : Padding(
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.all(8),
                   child: SizedBox.expand(
                     child: Image.memory(
                       item.bytes!,
@@ -151,7 +172,7 @@ class ImageGallery extends StatelessWidget {
                 ),
         ),
         Padding(
-          padding: const EdgeInsets.all(10),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
           child: Text(
             item.asset.name,
             maxLines: 1,
@@ -160,6 +181,22 @@ class ImageGallery extends StatelessWidget {
           ),
         ),
       ],
+    ),
+  );
+
+  /// 卡片操作按钮：紧凑 30px 见方，避免撑高卡片头部。
+  Widget _cardAction({
+    required String tooltip,
+    required VoidCallback? onPressed,
+    required IconData icon,
+  }) => SizedBox(
+    width: 30,
+    height: 30,
+    child: IconButton(
+      padding: EdgeInsets.zero,
+      tooltip: tooltip,
+      onPressed: onPressed,
+      icon: Icon(icon, size: 17),
     ),
   );
   Future<void> _save(GalleryItem item) async {

@@ -1,0 +1,6 @@
+# 签署 RSA JWT、读取 JKS，以及校验 Skill 元数据。
+cryptography>=42
+pyjks>=20.0.0
+PyYAML>=6
+# 为独立 Python 环境提供可信 CA，保持 HTTPS 证书校验开启。
+certifi>=2024.2.2
