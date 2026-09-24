@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'core/maintenance_controller.dart';
+import 'core/settings_migration.dart';
 import 'core/update_check.dart';
 import 'ui/maintenance_screen.dart';
 import 'ui/update_dialog.dart';
@@ -9,7 +10,8 @@ void main() {
   WidgetsFlutterBinding.ensureInitialized();
   final controller = MaintenanceController();
   runApp(MaintenanceApp(controller: controller));
-  controller.restore();
+  // 从 macOS 沙盒版升级时先搬回旧偏好，再恢复业务设置。
+  migrateSandboxPreferences().then((_) => controller.restore());
 }
 
 class MaintenanceApp extends StatefulWidget {
