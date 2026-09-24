@@ -2,11 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>com.apple.security.app-sandbox</key>
-	<true/>
-	<key>com.apple.security.files.user-selected.read-write</key>
-	<true/>
-	<key>com.apple.security.network.client</key>
-	<true/>
+	<!-- 内部工具，ad-hoc 签名分发，不启用 App Sandbox：
+	     沙盒会拒绝 spawn 进程、禁止写用户目录，且沙盒下载的文件会被 Gatekeeper
+	     硬性拒绝执行（File created by an AppSandbox），导致应用内更新装完无法打开。 -->
 </dict>
 </plist>

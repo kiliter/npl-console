@@ -62,7 +62,7 @@ jobs:
         flutter analyze --no-pub
         flutter test --no-pub
         APP='build/macos/Build/Products/Release/NPL Maintenance.app'
-        # CI 使用临时签名并保留沙盒权限；没有 Developer ID 或公证。
+        # CI 使用临时签名；不启用沙盒（应用内更新需要写盘与拉起安装）。
         codesign --force --deep --sign - --entitlements macos/Runner/Release.entitlements "$APP"
         codesign --verify --deep --strict "$APP"
         mkdir -p "$RUNNER_TEMP/dmg-stage" dist

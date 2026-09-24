@@ -32,7 +32,7 @@ Android 使用同一长期发布密钥，以下仓库 Actions Secrets 必须齐�
 
 密钥仅在 runner 临时目录还原，不进入 Git 或发布附件。本地 `.release-signing/` 与 `android/key.properties` 已忽略，请安全备份，后续更新沿用同一密钥。
 
-macOS 使用 ad-hoc 签名并保留沙盒权限，提供 Universal DMG；没有 Developer ID 或 Apple 公证，其他 Mac 可能阻止直接打开。
+macOS 使用 ad-hoc 签名且不启用 App Sandbox（沙盒会阻止应用内更新写盘与拉起安装），提供 Universal DMG；没有 Developer ID 或 Apple 公证，其他 Mac 可能阻止直接打开。
 
 Windows 在 runner 生成自签名证书签署主程序，ZIP 仅附公钥证书。完整解压后运行 EXE，系统不会默认信任该证书，可能显示 SmartScreen。
 

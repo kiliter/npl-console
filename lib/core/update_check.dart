@@ -3,7 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 /// 应用当前版本；发布新版本时与 pubspec.yaml 的 version 字段同步修改。
-const appVersion = '1.3.3';
+const appVersion = '1.3.4';
 
 /// GitHub 发布仓库（所有者/仓库名），正式包由 CI 推送到该仓库 Release。
 const releaseRepo = 'kiliter/npl-console';
