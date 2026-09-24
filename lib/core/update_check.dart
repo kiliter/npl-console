@@ -3,7 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 /// 应用当前版本；发布新版本时与 pubspec.yaml 的 version 字段同步修改。
-const appVersion = '1.3.5';
+const appVersion = '1.3.6';
 
 /// GitHub 发布仓库（所有者/仓库名），正式包由 CI 推送到该仓库 Release。
 const releaseRepo = 'kiliter/npl-console';
@@ -57,20 +57,23 @@ int compareVersions(String a, String b) {
 
 /// 按运行平台从 Release 附件中挑选安装包；iOS（未签名 IPA 无法自安装）
 /// 与没有匹配附件时返回 null，由调用方回退到浏览器下载。
+/// macOS 优先 PKG（系统安装器自动覆盖旧版并提示清理安装包），
+/// 兼容只有 DMG 的旧 Release。
 /// 附件命名约定见 .github/workflows/release.yml。
 ReleaseAsset? selectAssetForPlatform(
   TargetPlatform platform,
   List<ReleaseAsset> assets,
 ) {
-  final suffix = switch (platform) {
-    TargetPlatform.android => '-android-release.apk',
-    TargetPlatform.macOS => '-macos-universal.dmg',
-    TargetPlatform.windows => '-windows-x64-selfsigned.zip',
-    _ => null,
+  final suffixes = switch (platform) {
+    TargetPlatform.android => const ['-android-release.apk'],
+    TargetPlatform.macOS => const ['-macos-universal.pkg', '-macos-universal.dmg'],
+    TargetPlatform.windows => const ['-windows-x64-selfsigned.zip'],
+    _ => const <String>[],
   };
-  if (suffix == null) return null;
-  for (final asset in assets) {
-    if (asset.name.endsWith(suffix)) return asset;
+  for (final suffix in suffixes) {
+    for (final asset in assets) {
+      if (asset.name.endsWith(suffix)) return asset;
+    }
   }
   return null;
 }

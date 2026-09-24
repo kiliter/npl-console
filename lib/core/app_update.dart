@@ -76,24 +76,18 @@ Future<void> downloadRelease({
   }
 }
 
-/// 选择下载保存目录。
-/// macOS 正式包启用系统沙盒，直接写 ~/Downloads、spawn 进程均被拒绝，
-/// 因此 macOS 保存到应用支持目录（沙盒内可写）；Android 放临时目录；
-/// Windows 无沙盒，优先放系统下载目录，取不到时退回临时目录。
+/// 选择下载保存目录：Android 放临时目录（安装器可直接读取），
+/// 桌面端放系统下载目录——macOS 已去除沙盒可以写入，且系统 Installer
+/// 对「下载」里的 PKG 装完会提示移到废纸篓；取不到时退回临时目录。
 Future<Directory> downloadDirectory() async {
   if (Platform.isAndroid) return getTemporaryDirectory();
-  if (Platform.isMacOS) {
-    final support = await getApplicationSupportDirectory();
-    final dir = Directory('${support.path}${Platform.pathSeparator}updates');
-    if (!dir.existsSync()) await dir.create(recursive: true);
-    return dir;
-  }
   final downloads = await getDownloadsDirectory();
   return downloads ?? getTemporaryDirectory();
 }
 
 /// 下载完成后拉起安装，返回给用户的后续操作提示。
-/// Android 调起系统安装器；macOS 打开 DMG；Windows 解压便携 ZIP 并打开所在目录。
+/// Android 调起系统安装器；macOS 打开 PKG 安装器（或旧 Release 的 DMG）；
+/// Windows 解压便携 ZIP 并打开所在目录。
 /// iOS 不支持应用内安装，调用方应在 UI 层回退到浏览器下载。
 Future<String> launchInstaller(String filePath) async {
   if (Platform.isAndroid) {
@@ -104,11 +98,13 @@ Future<String> launchInstaller(String filePath) async {
     return '已调起系统安装器，请按提示完成安装。';
   }
   if (Platform.isMacOS) {
-    // 沙盒内不能 spawn 进程（Process.run('open') 会被拒绝），
-    // 改用 url_launcher，底层走系统 LaunchServices，沙盒允许。
+    // 通过 LaunchServices 打开安装包（url_launcher，沙盒外同样适用）。
     final opened = await launchUrl(Uri.file(filePath));
-    if (!opened) throw const FormatException('无法打开磁盘映像');
-    return '已打开磁盘映像，请将应用拖入「应用程序」完成更新。';
+    if (!opened) throw const FormatException('无法打开安装包');
+    // PKG 由系统安装器自动覆盖旧版，装完提示可移到废纸篓；DMG 需手动拖入。
+    return filePath.endsWith('.pkg')
+        ? '已打开系统安装器，请按向导完成安装，结束后可将安装包移到废纸篓。'
+        : '已打开磁盘映像，请将应用拖入「应用程序」完成更新。';
   }
   if (Platform.isWindows) {
     final target = await _extractZip(filePath);

@@ -99,6 +99,11 @@ void main() {
         size: 200,
       ),
       const ReleaseAsset(
+        name: 'NPL-Console-v9.9.9-macos-universal.pkg',
+        downloadUrl: 'https://github.com/x/macos.pkg',
+        size: 250,
+      ),
+      const ReleaseAsset(
         name: 'NPL-Console-v9.9.9-windows-x64-selfsigned.zip',
         downloadUrl: 'https://github.com/x/win.zip',
         size: 300,
@@ -117,11 +122,21 @@ void main() {
       );
       expect(
         selectAssetForPlatform(TargetPlatform.macOS, assets)!.name,
-        endsWith('-macos-universal.dmg'),
+        endsWith('-macos-universal.pkg'),
       );
       expect(
         selectAssetForPlatform(TargetPlatform.windows, assets)!.name,
         endsWith('-windows-x64-selfsigned.zip'),
+      );
+    });
+
+    test('macOS 只有 DMG 的旧 Release 回退匹配 DMG', () {
+      final dmgOnly = assets
+          .where((asset) => !asset.name.endsWith('.pkg'))
+          .toList();
+      expect(
+        selectAssetForPlatform(TargetPlatform.macOS, dmgOnly)!.name,
+        endsWith('-macos-universal.dmg'),
       );
     });
 

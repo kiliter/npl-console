@@ -32,7 +32,7 @@ Android 使用同一长期发布密钥，以下仓库 Actions Secrets 必须齐�
 
 密钥仅在 runner 临时目录还原，不进入 Git 或发布附件。本地 `.release-signing/` 与 `android/key.properties` 已忽略，请安全备份，后续更新沿用同一密钥。
 
-macOS 使用 ad-hoc 签名且不启用 App Sandbox（沙盒会阻止应用内更新写盘与拉起安装），提供 Universal DMG；没有 Developer ID 或 Apple 公证，其他 Mac 可能阻止直接打开。
+macOS 使用 ad-hoc 签名且不启用 App Sandbox（沙盒会阻止应用内更新写盘与拉起安装），提供 Universal DMG 与 PKG 安装器（应用内更新优先使用 PKG，系统安装器自动覆盖旧版）；没有 Developer ID 或 Apple 公证，其他 Mac 可能阻止直接打开。
 
 Windows 在 runner 生成自签名证书签署主程序，ZIP 仅附公钥证书。完整解压后运行 EXE，系统不会默认信任该证书，可能显示 SmartScreen。
 
@@ -40,6 +40,6 @@ iOS 提供真机 arm64 未签名 Release IPA，需有效 Apple 开发者证书�
 
 ## 产物与验证
 
-发布 APK、DMG、Windows ZIP、未签名 IPA 四份安装包。不发布 Debug、模拟器包或 AAB。
+发布 APK、DMG、PKG、Windows ZIP、未签名 IPA 五份安装包。不发布 Debug、模拟器包或 AAB。
 
 全量测试在 macOS 正式构建后执行，以确保 PDFium 原生库可用。附件仅在 GitHub runner 汇集上传，临时 Actions artifact 保留 1 天；不下载到维护者电脑，不生成额外哈希文件。Release 附件正常保留。
