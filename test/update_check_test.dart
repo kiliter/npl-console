@@ -3,10 +3,28 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:npl_maintenance/core/update_check.dart';
 
 /// 验证检查更新的版本比较与 GitHub Release 解析，全部使用模拟 HTTP，不访问真实网络。
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  // 模拟系统返回的安装包版本，不依赖手写的应用版本常量。
+  setUp(() {
+    PackageInfo.setMockInitialValues(
+      appName: '无纸化维护中心',
+      packageName: 'cn.agilestar.nplMaintenance',
+      version: '4.5.6',
+      buildNumber: '123',
+      buildSignature: '',
+    );
+  });
+
+  test('统一版本来源读取安装包版本', () async {
+    expect(await readAppVersion(), '4.5.6');
+  });
+
   group('版本比较', () {
     test('忽略 v 前缀与构建号，按数字段比较', () {
       expect(compareVersions('v1.2.0', '1.1.0'), greaterThan(0));
@@ -19,6 +37,21 @@ void main() {
   });
 
   group('检查最新 Release', () {
+    // 不传 currentVersion，验证生产调用路径使用系统返回的真实版本。
+    test('安装包已是最新版时不再重复提示更新', () async {
+      final client = MockClient(
+        (_) async => http.Response(jsonEncode({'tag_name': 'v4.5.6'}), 200),
+      );
+      expect(await checkLatestRelease(client: client), isNull);
+    });
+
+    test('安装包版本低于最新版时正常提示更新', () async {
+      final client = MockClient(
+        (_) async => http.Response(jsonEncode({'tag_name': 'v4.5.7'}), 200),
+      );
+      expect((await checkLatestRelease(client: client))!.version, '4.5.7');
+    });
+
     test('有更新版本时返回版本号、下载地址与更新说明', () async {
       final client = MockClient((request) async {
         expect(request.method, 'GET');
@@ -30,7 +63,8 @@ void main() {
           utf8.encode(
             jsonEncode({
               'tag_name': 'v9.9.9',
-              'html_url': 'https://github.com/kiliter/npl-console/releases/tag/v9.9.9',
+              'html_url':
+                  'https://github.com/kiliter/npl-console/releases/tag/v9.9.9',
               'body': '修复若干问题',
             }),
           ),
@@ -58,11 +92,17 @@ void main() {
         ),
       );
       expect(
-        await checkLatestRelease(client: client('v1.2.0'), currentVersion: '1.2.0'),
+        await checkLatestRelease(
+          client: client('v1.2.0'),
+          currentVersion: '1.2.0',
+        ),
         isNull,
       );
       expect(
-        await checkLatestRelease(client: client('v1.1.0'), currentVersion: '1.2.0'),
+        await checkLatestRelease(
+          client: client('v1.1.0'),
+          currentVersion: '1.2.0',
+        ),
         isNull,
       );
     });
@@ -147,7 +187,8 @@ void main() {
     });
 
     test('加速站前缀改写下载地址，空前缀原样返回', () {
-      const url = 'https://github.com/kiliter/npl-console/releases/download/v1/a.apk';
+      const url =
+          'https://github.com/kiliter/npl-console/releases/download/v1/a.apk';
       expect(applyProxyPrefix(url, ''), url);
       expect(applyProxyPrefix(url, '   '), url);
       expect(

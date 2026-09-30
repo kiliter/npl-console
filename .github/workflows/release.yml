@@ -31,6 +31,9 @@ jobs:
       run: |-
         [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '版本标签格式错误'; exit 1; }
         SHA=$(git rev-parse "refs/tags/$TAG^{commit}")
+        # pubspec.yaml 是唯一版本来源，标签只用于标识发布，禁止覆盖成另一版本。
+        PACKAGE_VERSION=$(git show "$SHA:pubspec.yaml" | sed -nE 's/^version: ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p')
+        [[ "${TAG#v}" == "$PACKAGE_VERSION" ]] || { echo '版本标签与 pubspec.yaml 不一致'; exit 1; }
         echo "tag=$TAG" >> "$GITHUB_OUTPUT"
         echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
         echo "sha=$SHA" >> "$GITHUB_OUTPUT"

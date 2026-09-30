@@ -27,6 +27,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
   // GitHub 加速站前缀，输入即持久化，应用内更新下载时使用。
   final proxy = TextEditingController();
   final proxyStore = GithubProxyStore();
+  // 界面和检查更新共用安装包版本来源；重绘时复用同一次读取。
+  late final Future<String> appVersion = readAppVersion();
   Uint8List? keyBytes;
   String fileName = '', error = '';
   bool saving = false, checkingUpdate = false;
@@ -126,7 +128,8 @@ class _SettingsDialogState extends State<SettingsDialog> {
   Future<void> checkUpdate() async {
     setState(() => checkingUpdate = true);
     try {
-      final update = await checkLatestRelease();
+      final version = await readAppVersion();
+      final update = await checkLatestRelease(currentVersion: version);
       if (!mounted) return;
       if (update != null) {
         await showUpdateDialog(context, update);
@@ -136,7 +139,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
           builder: (dialogContext) => AlertDialog(
             title: const Text('已是最新版本'),
             content: Text(
-              '当前版本 v$appVersion 已是最新。',
+              '当前版本 v$version 已是最新。',
               style: const TextStyle(fontSize: 13, height: 1.7),
             ),
             actions: [
@@ -250,9 +253,19 @@ class _SettingsDialogState extends State<SettingsDialog> {
             ),
             Row(
               children: [
-                const Text(
-                  '当前版本 v$appVersion',
-                  style: TextStyle(fontSize: 12, color: Color(0xff8090a5)),
+                FutureBuilder<String>(
+                  future: appVersion,
+                  builder: (context, snapshot) => Text(
+                    snapshot.hasData
+                        ? '当前版本 v${snapshot.data}'
+                        : snapshot.hasError
+                        ? '当前版本读取失败'
+                        : '正在读取版本…',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Color(0xff8090a5),
+                    ),
+                  ),
                 ),
                 const Spacer(),
                 TextButton.icon(

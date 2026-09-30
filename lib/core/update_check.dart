@@ -1,9 +1,15 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:package_info_plus/package_info_plus.dart';
 
-/// 应用当前版本；发布新版本时与 pubspec.yaml 的 version 字段同步修改。
-const appVersion = '1.3.6';
+/// 统一读取安装包的真实版本，插件会缓存结果；版本仅在 pubspec.yaml 中维护。
+/// 读取失败时向调用方报告错误，避免使用虚假旧版本触发重复升级。
+Future<String> readAppVersion() async {
+  final version = (await PackageInfo.fromPlatform()).version.trim();
+  if (version.isEmpty) throw const FormatException('无法读取当前应用版本');
+  return version;
+}
 
 /// GitHub 发布仓库（所有者/仓库名），正式包由 CI 推送到该仓库 Release。
 const releaseRepo = 'kiliter/npl-console';
@@ -66,7 +72,10 @@ ReleaseAsset? selectAssetForPlatform(
 ) {
   final suffixes = switch (platform) {
     TargetPlatform.android => const ['-android-release.apk'],
-    TargetPlatform.macOS => const ['-macos-universal.pkg', '-macos-universal.dmg'],
+    TargetPlatform.macOS => const [
+      '-macos-universal.pkg',
+      '-macos-universal.dmg',
+    ],
     TargetPlatform.windows => const ['-windows-x64-selfsigned.zip'],
     _ => const <String>[],
   };
@@ -111,8 +120,9 @@ List<ReleaseAsset> _parseAssets(Object? raw) {
 /// 该请求只访问 GitHub 公开接口，与业务服务地址无关。
 Future<UpdateInfo?> checkLatestRelease({
   http.Client? client,
-  String currentVersion = appVersion,
+  String? currentVersion,
 }) async {
+  final installedVersion = currentVersion ?? await readAppVersion();
   final httpClient = client ?? http.Client();
   try {
     final response = await httpClient
@@ -130,7 +140,7 @@ Future<UpdateInfo?> checkLatestRelease({
       throw const FormatException('检查更新失败：发布信息格式异常');
     }
     final latest = decoded['tag_name'] as String;
-    if (compareVersions(latest, currentVersion) <= 0) return null;
+    if (compareVersions(latest, installedVersion) <= 0) return null;
     return UpdateInfo(
       version: latest.replaceAll(RegExp(r'^[vV]'), ''),
       url:
