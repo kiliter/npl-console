@@ -155,6 +155,36 @@ String repairEmbeddedJson(String input) {
   return text;
 }
 
+/// 兼容受理内容中的未转义引号，仅处理明确由 `<row>…</row>` 包裹的
+/// acceptContent 字符串。保留已经正确转义的 \n、\"、\\ 等内容，
+/// 不全局删除反斜线，也不修改业务字段；调用方仍保留完整原文。
+String repairAcceptContentJson(String input) {
+  final field = RegExp(
+    r'("acceptContent"\s*:\s*")(<row>[\s\S]*?</row>)("(?=\s*[,}\]]))',
+  );
+  return input.replaceAllMapped(field, (match) {
+    final value = match.group(2)!;
+    final repaired = StringBuffer();
+    for (var i = 0; i < value.length; i++) {
+      final char = value[i];
+      if (char == r'\' && i + 1 < value.length) {
+        // 已有 JSON 转义交给 jsonDecode 处理，不能再次转义造成内容失真。
+        repaired.write(char);
+        repaired.write(value[++i]);
+      } else if (char == '"') {
+        repaired.write(r'\"');
+      } else if (char.codeUnitAt(0) < 0x20) {
+        // 非法的原始换行等控制字符也按 JSON 规则编码，值本身不丢失。
+        final escaped = jsonEncode(char);
+        repaired.write(escaped.substring(1, escaped.length - 1));
+      } else {
+        repaired.write(char);
+      }
+    }
+    return '${match.group(1)}$repaired${match.group(3)}';
+  });
+}
+
 /// 自动识别 JSON/XML；显式选择格式时返回解析错误，原文始终可查看。
 MessageDocument parseMessage(Object? input, {String mode = 'auto'}) {
   final raw = MessageNode('根节点', '', input).source;
@@ -162,6 +192,7 @@ MessageDocument parseMessage(Object? input, {String mode = 'auto'}) {
     return MessageDocument('text', raw, MessageNode('文本', '', raw));
   }
   Object? data = input;
+  String? autoError;
   if (data is XmlNode && mode != 'json') {
     return MessageDocument('xml', raw, MessageNode('根节点', '', data));
   }
@@ -189,7 +220,7 @@ MessageDocument parseMessage(Object? input, {String mode = 'auto'}) {
       // 服务端常见缺陷：把 JSON 原文未转义嵌进字符串值（如 reqData）。
       // 修复后再解析一次，结构化视图不受影响，原文仍按 source 原样展示。
       if (mode == 'auto') {
-        final repaired = repairEmbeddedJson(raw);
+        final repaired = repairAcceptContentJson(repairEmbeddedJson(raw));
         if (repaired != raw) {
           try {
             return MessageDocument(
@@ -198,6 +229,9 @@ MessageDocument parseMessage(Object? input, {String mode = 'auto'}) {
               MessageNode('根节点', '', jsonDecode(repaired)),
             );
           } catch (_) {}
+        }
+        if (raw.trimLeft().startsWith('{') || raw.trimLeft().startsWith('[')) {
+          autoError = 'JSON 解析未成功，当前显示完整原文；选择 JSON 可查看错误位置。';
         }
       }
       if (mode == 'json') {
@@ -228,7 +262,7 @@ MessageDocument parseMessage(Object? input, {String mode = 'auto'}) {
       }
     }
   }
-  return MessageDocument('text', raw, MessageNode('文本', '', raw));
+  return MessageDocument('text', raw, MessageNode('文本', '', raw), autoError);
 }
 
 /// 字段名和内容关键字同时过滤；返回匹配节点及路径，不改动原报文结构。

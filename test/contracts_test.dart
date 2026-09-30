@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:npl_maintenance/core/contracts.dart';
 import 'package:npl_maintenance/core/maintenance_controller.dart';
+import 'package:npl_maintenance/core/message_document.dart';
 
 /// 验证月份边界、OBS 契约及异步取消，使用模拟 HTTP，不访问生产服务。
 void main() {
@@ -33,11 +34,7 @@ void main() {
       'caseNo': 'CASE',
     });
     expect(
-      tableQueryBody(
-        TableKind.woinfo,
-        sysAccept: ' FLOW ',
-        opMonth: '2026-09',
-      ),
+      tableQueryBody(TableKind.woinfo, sysAccept: ' FLOW ', opMonth: '2026-09'),
       {'sysAccept': 'FLOW', 'opMonth': '202609'},
     );
     expect(
@@ -63,8 +60,7 @@ void main() {
       throwsFormatException,
     );
     expect(
-      () =>
-          tableQueryBody(TableKind.wopicinfo, caseNo: 'CASE', picSeq: 'abc'),
+      () => tableQueryBody(TableKind.wopicinfo, caseNo: 'CASE', picSeq: 'abc'),
       throwsFormatException,
     );
     expect(
@@ -242,18 +238,27 @@ void main() {
     final controller = MaintenanceController(
       clientFactory: () => MockClient((request) async {
         if (request.url.path.endsWith('/agapi/biz/downloadBiz')) {
-          return http.Response('{"result":0,"data":"{\\"a\\":1}","desc":""}', 200);
+          return http.Response(
+            '{"result":0,"data":"{\\"a\\":1}","desc":""}',
+            200,
+          );
         }
         if (request.url.path.endsWith('/test/un_look')) {
-          return http.Response('留存报文内容', 200, headers: {
-            'content-type': 'text/plain; charset=utf-8',
-          });
+          return http.Response(
+            '留存报文内容',
+            200,
+            headers: {'content-type': 'text/plain; charset=utf-8'},
+          );
         }
         return http.Response('[{"caseNo":"CASE","cmdCode":"cmdjs001"}]', 200);
       }),
       testToken: () => 'test',
     )..settings = settings;
-    controller.work = {'caseNo': 'CASE', 'opMonth': '202609', 'regionCode': '025'};
+    controller.work = {
+      'caseNo': 'CASE',
+      'opMonth': '202609',
+      'regionCode': '025',
+    };
     await controller.selectCategory(Category.message);
     // 三份留存报文之后追加一份全量报文，默认仍加载首份留存报文。
     expect(controller.assets.length, 4);
@@ -265,6 +270,56 @@ void main() {
     expect(controller.asset?.name, 'CASE_全量报文.json');
     controller.dispose();
   });
+  test('外层 data 转义字符串经下载和解析后保留全部受理字段', () async {
+    // HTTP 正文用 jsonEncode 构造：data 必须是字符串，不能用对象替代真实接口。
+    const payload =
+        r'{"reqData":{"woOpList":[{"acceptContent":"<row>"条款"\n第二行</row>"}],"agreeCheck":true}}';
+    final response = jsonEncode({'result': 0, 'data': payload});
+    final controller = MaintenanceController(
+      clientFactory: () => MockClient(
+        (_) async => http.Response(
+          response,
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        ),
+      ),
+      testToken: () => 'test',
+    )..settings = settings;
+    controller.work = {'caseNo': 'CASE'};
+    final text = await controller.downloadFullBiz();
+    final doc = parseMessage(text);
+    expect(doc.format, 'json');
+    expect(searchMessage(doc.root, key: 'agreeCheck').single.value, true);
+    expect(
+      searchMessage(doc.root, key: 'acceptContent').single.value,
+      '<row>"条款"\n第二行</row>',
+    );
+    controller.dispose();
+  });
+
+  test('data 多重字符串转义逐层 JSON 解码，不全局替换反斜线', () async {
+    final expected = {
+      'reqData': {'text': r'保留字面量\n和路径C:\tmp'},
+    };
+    var payload = jsonEncode(expected);
+    for (var i = 0; i < 6; i++) {
+      payload = jsonEncode(payload);
+    }
+    final controller = MaintenanceController(
+      clientFactory: () => MockClient(
+        (_) async => http.Response(
+          jsonEncode({'result': 0, 'data': payload}),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        ),
+      ),
+      testToken: () => 'test',
+    )..settings = settings;
+    controller.work = {'caseNo': 'CASE'};
+    expect(jsonDecode(await controller.downloadFullBiz()), expected);
+    controller.dispose();
+  });
+
   test('全量报文 data 嵌套转义信封时逐层还原出真实报文', () async {
     // 服务端把整包响应再塞进 data：{"result":0,"data":"{\"result\":0,\"data\":\"...\"}"}。
     final nested = jsonEncode({

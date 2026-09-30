@@ -502,10 +502,16 @@ class MaintenanceController extends ChangeNotifier {
           content.containsKey('data') &&
           (content.containsKey('desc') || content.containsKey('details'));
       Object? content = decoded['data'];
-      for (var i = 0; i < 4; i++) {
+      // 每次解码都会去掉一层字符串/信封，不按层数提前停止；
+      // 双重转义的 data 以引号开头，也必须交给 JSON 解码器处理。
+      while (true) {
         if (content is String) {
           final text = content.trim();
-          if (!text.startsWith('{') && !text.startsWith('[')) break;
+          if (!text.startsWith('{') &&
+              !text.startsWith('[') &&
+              !text.startsWith('"')) {
+            break;
+          }
           try {
             content = jsonDecode(text);
           } catch (_) {

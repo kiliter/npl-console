@@ -48,6 +48,23 @@ class _MessageExplorerState extends State<MessageExplorer> {
     document = parseMessage(frames.last.value, mode: mode);
   }
 
+  /// 刷新或切换数据时丢弃旧报文的导航状态，避免界面继续展示缓存内容。
+  @override
+  void didUpdateWidget(covariant MessageExplorer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.text == widget.text) return;
+    frames
+      ..clear()
+      ..add(MessageNode('原始报文', '', widget.text));
+    mode = 'auto';
+    rawView = pretty = false;
+    keySearch.clear();
+    keyword.clear();
+    session.keyText = session.keywordText = '';
+    _parse();
+    if (scroll.hasClients) scroll.jumpTo(0);
+  }
+
   @override
   void dispose() {
     keySearch.dispose();
@@ -439,6 +456,7 @@ class _MessageExplorerState extends State<MessageExplorer> {
       }
     }
     spans.add(TextSpan(text: text.substring(offset)));
+    final blocks = _textBlocks(spans);
     return Column(
       children: [
         if (term.isNotEmpty)
@@ -458,13 +476,28 @@ class _MessageExplorerState extends State<MessageExplorer> {
               padding: const EdgeInsets.all(22),
               child: SizedBox(
                 width: double.infinity,
-                child: SelectableText.rich(
-                  TextSpan(children: spans),
-                  style: const TextStyle(
-                    fontFamily: 'Menlo',
-                    fontSize: 13,
-                    height: 1.8,
-                    color: Color(0xff36567d),
+                // 连续滚动、跨块选中；每块独立排版和绘制，避免整份长报文
+                // 形成一个巨大的 RenderParagraph。分块只影响显示，不改原文。
+                child: SelectionArea(
+                  child: Column(
+                    key: const ValueKey('raw-message-text'),
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (var i = 0; i < blocks.length; i++)
+                        RepaintBoundary(
+                          child: Text.rich(
+                            TextSpan(children: blocks[i]),
+                            key: ValueKey('raw-message-block-$i'),
+                            softWrap: true,
+                            style: const TextStyle(
+                              fontFamily: 'Menlo',
+                              fontSize: 13,
+                              height: 1.8,
+                              color: Color(0xff36567d),
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
               ),
@@ -473,5 +506,42 @@ class _MessageExplorerState extends State<MessageExplorer> {
         ),
       ],
     );
+  }
+
+  /// 限制单个文本块的 UTF-16 长度，同时保留全部字符与搜索高亮。
+  /// 不切断代理对及 CRLF；跨边界的匹配保留两侧高亮，复制整份仍使用 source。
+  List<List<TextSpan>> _textBlocks(List<TextSpan> spans) {
+    const limit = 1024;
+    final blocks = <List<TextSpan>>[];
+    var block = <TextSpan>[];
+    var length = 0;
+    for (final span in spans) {
+      final value = span.text ?? '';
+      var start = 0;
+      while (start < value.length) {
+        var end = (start + limit - length).clamp(start, value.length);
+        if (end < value.length && end > start) {
+          final previous = value.codeUnitAt(end - 1);
+          if ((previous >= 0xd800 && previous <= 0xdbff) ||
+              (previous == 13 && value.codeUnitAt(end) == 10)) {
+            end--;
+          }
+        }
+        if (end > start) {
+          block.add(
+            TextSpan(text: value.substring(start, end), style: span.style),
+          );
+          length += end - start;
+          start = end;
+        }
+        if (length == limit || start < value.length) {
+          blocks.add(block);
+          block = <TextSpan>[];
+          length = 0;
+        }
+      }
+    }
+    if (block.isNotEmpty) blocks.add(block);
+    return blocks;
   }
 }

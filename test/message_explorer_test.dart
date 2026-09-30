@@ -6,6 +6,24 @@ import 'package:npl_maintenance/ui/message_explorer.dart';
 
 /// 从报文中的 XML 字段深入 CDATA JSON，验证折叠、搜索及返回根节点。
 void main() {
+  // 同一个预览组件接收新报文时，不能继续使用会话里缓存的旧根节点。
+  testWidgets('刷新报文后展示新内容并清除旧专注和搜索', (tester) async {
+    final session = MessageSession();
+    Future<void> show(String text) => tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MessageExplorer(text: text, session: session),
+        ),
+      ),
+    );
+    await show('旧报文');
+    await tester.enterText(find.byKey(const ValueKey('keyword-search')), '旧');
+    await show('新报文完整内容');
+    expect(session.frames.single.value, '新报文完整内容');
+    expect(session.keywordText, isEmpty);
+    expect(find.text('新报文完整内容'), findsOneWidget);
+  });
+
   testWidgets('字段逐层专注、折叠、搜索及面包屑返回', (tester) async {
     await tester.binding.setSurfaceSize(const Size(1200, 900));
     final source = jsonEncode({
