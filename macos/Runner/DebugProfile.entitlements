@@ -2,6 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- file_picker 保存用户所选文件前会检查此声明，未启用沙盒时也必须提供。 -->
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
 	<!-- 与正式包一致不启用 App Sandbox（见 Release.entitlements 注释），
 	     保留调试所需的 JIT 与本地网络能力。 -->
 	<key>com.apple.security.cs.allow-jit</key>
