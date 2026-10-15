@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.3.9+13
+version: 1.4.0+14
 
 environment:
   sdk: ^3.12.2
@@ -52,6 +52,9 @@ dependencies:
   archive: ^4.0.7
   # Android 端下载完成后调起系统 APK 安装器（插件自带 FileProvider）。
   open_filex: ^4.7.0
+  # 应用内门户网页：内网地址证书域名不匹配需 SSL 放行回调，官方 webview_flutter 不支持。
+  # AGP 9 移除了 proguard-android.txt，6.1.5 稳定版的 Android 子包构建失败，6.2.0-beta 系列已修复。
+  flutter_inappwebview: 6.2.0-beta.3
 
 dev_dependencies:
   flutter_test:

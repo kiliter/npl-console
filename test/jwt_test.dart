@@ -48,4 +48,28 @@ void main() {
       throwsFormatException,
     );
   });
+
+  /// OAEP 公钥加密、私钥解密往返：内置链接密文只能在持有私钥的设备还原。
+  test('RSA-OAEP 加密链接仅私钥可解密', () {
+    final key = JwtSigner.import(
+      File('test/fixtures/sample.jks').readAsBytesSync(),
+      password: 'fixture-password',
+    );
+    final encrypter = OAEPEncoding(RSAEngine())
+      ..init(
+        true,
+        PublicKeyParameter<RSAPublicKey>(
+          RSAPublicKey(key.modulus, BigInt.from(65537)),
+        ),
+      );
+    final cipher = encrypter.process(
+      Uint8List.fromList(utf8.encode('https://example.test/login/')),
+    );
+    expect(utf8.decode(cipher, allowMalformed: true), isNot(contains('http')));
+    expect(key.decrypt(cipher), 'https://example.test/login/');
+    expect(
+      () => key.decrypt(Uint8List.fromList(cipher)..[10] ^= 1),
+      throwsA(anything),
+    );
+  });
 }

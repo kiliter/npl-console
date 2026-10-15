@@ -9,6 +9,16 @@ class JwtSigner {
   final String alias;
   JwtSigner._(this._key, this.alias);
 
+  /// 供加密工具取公钥模数（指数恒为 65537），私钥参数不出本对象。
+  BigInt get modulus => _key.modulus!;
+
+  /// RSA-OAEP 解密：内置加密链接仅由持有私钥的本机还原，密文可随仓库分发。
+  String decrypt(Uint8List cipher) {
+    final engine = OAEPEncoding(RSAEngine())
+      ..init(false, PrivateKeyParameter<RSAPrivateKey>(_key));
+    return utf8.decode(engine.process(cipher));
+  }
+
   /// 仅供系统安全存储序列化使用，不得写入普通配置、文件或日志。
   String toSecureRecord() => jsonEncode({
     'version': 1,

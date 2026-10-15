@@ -6,11 +6,14 @@ import 'package:file_picker/file_picker.dart';
 import '../core/breakpoints.dart';
 import '../core/contracts.dart';
 import '../core/maintenance_controller.dart';
+import '../core/secure_links.dart';
 import 'file_preview.dart';
 import 'image_gallery.dart';
+import 'log_files_sheet.dart';
 import 'settings_dialog.dart';
 import 'query_sheet.dart';
 import 'table_query_sheet.dart';
+import 'web_page.dart';
 import 'work_details.dart';
 import 'logs_dialog.dart';
 
@@ -102,6 +105,21 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
     builder: (_) => LogsDialog(controller: c),
   );
 
+  /// 内置链接经私钥解密后在应用内打开；未导入密钥时提示先完成设置。
+  void openSecureLink(String name, String title) {
+    final uri = SecureLinks.resolve(name, c.signer);
+    if (uri == null) {
+      c.status('请先在设置中导入密钥库，再访问$title。', isError: true);
+      settings();
+      return;
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => WebPage(uri: uri, title: title),
+      ),
+    );
+  }
+
   /// 数据查询作为独立弹层呈现，不影响当前工单查询结果与阅读区。
   void openTableQuery() => showModalBottomSheet<void>(
     context: context,
@@ -110,15 +128,74 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
     backgroundColor: Colors.white,
     constraints: const BoxConstraints(maxWidth: 720),
     builder: (context) => Padding(
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.viewInsetsOf(context).bottom,
-      ),
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
       child: SizedBox(
         height: MediaQuery.sizeOf(context).height * .9,
         child: TableQuerySheet(controller: c),
       ),
     ),
   );
+
+  /// 日志文件面板与数据查询一样作为独立弹层，不影响当前查询结果。
+  void openLogFiles() => showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    useSafeArea: true,
+    backgroundColor: Colors.white,
+    constraints: const BoxConstraints(maxWidth: 820),
+    builder: (context) => SizedBox(
+      height: MediaQuery.sizeOf(context).height * .9,
+      child: LogFilesSheet(controller: c),
+    ),
+  );
+
+  /// 切换环境后结果与缓存清空，失败原因写入状态条。
+  Future<void> switchEnvironment(int index) async {
+    try {
+      await c.selectEnvironment(index);
+    } catch (e) {
+      c.status(
+        e is FormatException ? e.message : '切换环境失败：${e.runtimeType}',
+        isError: true,
+      );
+    }
+  }
+
+  /// 窄桌面只显示图标，环境名放在提示中，避免顶栏溢出。
+  Widget environmentMenu() => PopupMenuButton<int>(
+    tooltip: '切换环境 · 当前：${c.settings.current.name}',
+    onSelected: switchEnvironment,
+    itemBuilder: (_) => [
+      for (var i = 0; i < c.settings.environments.length; i++)
+        CheckedPopupMenuItem(
+          value: i,
+          checked: i == c.settings.active,
+          child: Text(c.settings.environments[i].name),
+        ),
+    ],
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.swap_horiz, size: 18),
+          if (MediaQuery.sizeOf(context).width >= 1100) ...[
+            const SizedBox(width: 4),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 120),
+              child: Text(
+                c.settings.current.name.isEmpty
+                    ? '未配置环境'
+                    : c.settings.current.name,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ],
+      ),
+    ),
+  );
+
   void choose(Record record) {
     section = 0;
     c.chooseWork(record);
@@ -227,7 +304,8 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
             // 搜索框宽随屏宽缩放，窄桌面优先保证右侧按钮不溢出。
             width: math.min(
               MediaQuery.sizeOf(context).width >= 1500 ? 560 : 400,
-              MediaQuery.sizeOf(context).width * .35,
+              MediaQuery.sizeOf(context).width *
+                  (MediaQuery.sizeOf(context).width >= 1100 ? .35 : .28),
             ),
             child: searchLaunch(),
           ),
@@ -241,18 +319,41 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
             onPressed: c.clearCache,
             icon: const Icon(Icons.cached, size: 19),
           ),
-          TextButton.icon(
-            onPressed: openTableQuery,
-            icon: const Icon(Icons.table_view_outlined, size: 18),
-            label: const Text('数据查询'),
+          // 窄桌面收为图标，给日志文件与环境切换入口留出空间。
+          if (MediaQuery.sizeOf(context).width >= 1100)
+            TextButton.icon(
+              onPressed: openTableQuery,
+              icon: const Icon(Icons.table_view_outlined, size: 18),
+              label: const Text('数据查询'),
+            )
+          else
+            IconButton(
+              tooltip: '数据查询',
+              onPressed: openTableQuery,
+              icon: const Icon(Icons.table_view_outlined, size: 19),
+            ),
+          IconButton(
+            tooltip: '日志文件',
+            onPressed: openLogFiles,
+            icon: const Icon(Icons.article_outlined, size: 19),
           ),
-          const SizedBox(width: 8),
           TextButton.icon(
             onPressed: logs,
             icon: const Icon(Icons.data_object, size: 18),
             label: Text('接口记录 ${c.logs.length}'),
           ),
-          const SizedBox(width: 8),
+          // 门户入口合并为菜单，窄桌面顶栏不溢出。
+          PopupMenuButton<String>(
+            tooltip: '门户网页',
+            onSelected: (v) =>
+                openSecureLink(v, v == 'intranet' ? '内网门户' : '外网门户'),
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'intranet', child: Text('内网门户')),
+              PopupMenuItem(value: 'extranet', child: Text('外网门户')),
+            ],
+            icon: const Icon(Icons.language, size: 19),
+          ),
+          environmentMenu(),
           OutlinedButton.icon(
             onPressed: settings,
             icon: const Icon(Icons.tune, size: 17),
@@ -271,10 +372,25 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
               if (v == 'settings') settings();
               if (v == 'logs') logs();
               if (v == 'tables') openTableQuery();
+              if (v == 'logFiles') openLogFiles();
+              if (v.startsWith('env:')) {
+                switchEnvironment(int.parse(v.substring(4)));
+              }
               if (v == 'cache') c.clearCache();
+              if (v == 'intranet') openSecureLink('intranet', '内网门户');
+              if (v == 'extranet') openSecureLink('extranet', '外网门户');
             },
             itemBuilder: (_) => [
               const PopupMenuItem(value: 'tables', child: Text('数据查询')),
+              const PopupMenuItem(value: 'logFiles', child: Text('日志文件')),
+              for (var i = 0; i < c.settings.environments.length; i++)
+                CheckedPopupMenuItem(
+                  value: 'env:$i',
+                  checked: i == c.settings.active,
+                  child: Text('环境 · ${c.settings.environments[i].name}'),
+                ),
+              const PopupMenuItem(value: 'intranet', child: Text('内网门户')),
+              const PopupMenuItem(value: 'extranet', child: Text('外网门户')),
               const PopupMenuItem(value: 'settings', child: Text('连接与密钥设置')),
               PopupMenuItem(
                 value: 'logs',
@@ -314,6 +430,7 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
       ),
     ),
   );
+
   /// 桌面端顶栏内联状态：绿点 + 当前消息 + 取消 / 查看失败，不独占一行。
   Widget statusInline() => Row(
     mainAxisSize: MainAxisSize.min,
@@ -330,10 +447,7 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
           c.message,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            fontSize: 10,
-            color: c.error ? Colors.red : muted,
-          ),
+          style: TextStyle(fontSize: 10, color: c.error ? Colors.red : muted),
         ),
       ),
       if (c.busy) TextButton(onPressed: c.cancel, child: const Text('取消')),
@@ -677,6 +791,7 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
       ),
     ],
   );
+
   /// 单据信息全宽单栏展示，不再与 PDF 分栏（原型已定稿）。
   Widget detailsArea() => WorkDetails(
     key: ValueKey(c.work),
@@ -859,7 +974,9 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
   /// 三级确认（单据信息 → 备份确认 → 修复确认）→ 上传 → 强制刷新预览最新 PDF。
   /// 任一步取消或失败都立即终止，绝不发出上传请求。
   Future<void> uploadRepair() async {
-    final selectedWork = c.work, selectedAsset = c.asset, currentBytes = c.bytes;
+    final selectedWork = c.work,
+        selectedAsset = c.asset,
+        currentBytes = c.bytes;
     if (selectedWork == null || selectedAsset == null || currentBytes == null) {
       c.status('请先打开单据 PDF，再执行上传修复。', isError: true);
       return;
@@ -902,7 +1019,12 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
     }
     if (!mounted) return;
     // 第一级确认：核对单据号、CRM 流水号（受理流水）与业务月份，确认目标参数。
-    final target = await confirmRepairTarget(selectedWork, file.name, newBytes.length, preset);
+    final target = await confirmRepairTarget(
+      selectedWork,
+      file.name,
+      newBytes.length,
+      preset,
+    );
     if (!mounted || target == null) return;
     // 第二级确认：确认当前单据已备份到本地。
     final backupOk = await confirmRepairBackup(backup);
@@ -967,7 +1089,10 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
               FilledButton.icon(
                 onPressed: () async {
                   final path = await FilePicker.saveFile(
-                    fileName: assetName.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_'),
+                    fileName: assetName.replaceAll(
+                      RegExp(r'[\\/:*?"<>|]'),
+                      '_',
+                    ),
                     bytes: bytes,
                     dialogTitle: '备份当前单据 PDF（上传前必做）',
                   );

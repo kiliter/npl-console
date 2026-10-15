@@ -17,8 +17,7 @@ class SettingsDialog extends StatefulWidget {
 }
 
 class _SettingsDialogState extends State<SettingsDialog> {
-  final base = TextEditingController(),
-      bucket = TextEditingController(),
+  final bucket = TextEditingController(),
       login = TextEditingController(),
       channel = TextEditingController();
   final password = TextEditingController(),
@@ -29,6 +28,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
   final proxyStore = GithubProxyStore();
   // 界面和检查更新共用安装包版本来源；重绘时复用同一次读取。
   late final Future<String> appVersion = readAppVersion();
+
+  /// 可切换的环境列表与当前选中下标。
+  final List<_EnvFields> envs = [];
+  int active = 0;
   Uint8List? keyBytes;
   String fileName = '', error = '';
   bool saving = false, checkingUpdate = false;
@@ -36,7 +39,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
   void initState() {
     super.initState();
     final value = widget.controller.settings;
-    base.text = value.baseUrl;
+    envs.addAll(value.environments.map(_EnvFields.new));
+    if (envs.isEmpty) envs.add(_EnvFields(const Environment(name: '默认环境')));
+    active = value.active.clamp(0, envs.length - 1);
     bucket.text = value.bucket;
     login.text = value.loginNo;
     channel.text = value.channel;
@@ -48,8 +53,10 @@ class _SettingsDialogState extends State<SettingsDialog> {
 
   @override
   void dispose() {
+    for (final env in envs) {
+      env.dispose();
+    }
     for (final field in [
-      base,
       bucket,
       login,
       channel,
@@ -93,8 +100,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
       error = '';
     });
     try {
-      final settings = ConnectionSettings(
-        baseUrl: base.text.trim().replaceAll(RegExp(r'/+$'), ''),
+      final settings = ConnectionSettings.multi(
+        environments: [for (final env in envs) env.value],
+        active: active,
         bucket: bucket.text.trim(),
         loginNo: login.text.trim(),
         channel: channel.text.trim(),
@@ -205,7 +213,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
               style: TextStyle(color: Color(0xff8090a5), fontSize: 12),
             ),
             const SizedBox(height: 20),
-            _field(base, '服务地址 baseUrl', hint: 'https://服务地址/上下文'),
+            environments(),
             _field(bucket, 'OBS 桶覆盖（可选）', hint: '留空按 receipt + regionCode'),
             Row(
               children: [
@@ -298,6 +306,94 @@ class _SettingsDialogState extends State<SettingsDialog> {
       ),
     ],
   );
+
+  /// 每个环境一组服务地址与 web 地址；左侧圆点选择当前环境。
+  Widget environments() => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Row(
+        children: [
+          const Text('环境', style: TextStyle(fontWeight: FontWeight.w600)),
+          const Spacer(),
+          TextButton.icon(
+            onPressed: saving
+                ? null
+                : () => setState(
+                    () => envs.add(
+                      _EnvFields(Environment(name: '环境${envs.length + 1}')),
+                    ),
+                  ),
+            icon: const Icon(Icons.add, size: 18),
+            label: const Text('新增环境'),
+          ),
+        ],
+      ),
+      for (var i = 0; i < envs.length; i++)
+        Container(
+          key: ObjectKey(envs[i]),
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.fromLTRB(4, 12, 4, 0),
+          decoration: BoxDecoration(
+            border: Border.all(
+              color: i == active
+                  ? Theme.of(context).colorScheme.primary
+                  : const Color(0xffdfe5ee),
+            ),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              IconButton(
+                tooltip: i == active ? '当前环境' : '设为当前环境',
+                onPressed: saving ? null : () => setState(() => active = i),
+                icon: Icon(
+                  i == active
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked,
+                ),
+              ),
+              Expanded(
+                child: Column(
+                  children: [
+                    _field(envs[i].name, '环境名称'),
+                    _field(
+                      envs[i].base,
+                      '服务地址 baseUrl',
+                      hint: 'https://服务地址/上下文',
+                    ),
+                    _field(
+                      envs[i].web,
+                      'web 地址（可选，仅日志文件使用）',
+                      hint: 'https://web地址/上下文',
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: '删除环境',
+                onPressed: saving || envs.length == 1
+                    ? null
+                    : () => removeEnv(i),
+                icon: const Icon(Icons.delete_outline),
+              ),
+            ],
+          ),
+        ),
+    ],
+  );
+
+  void removeEnv(int index) {
+    final removed = envs[index];
+    setState(() {
+      envs.removeAt(index);
+      if (active > index || active >= envs.length) active--;
+      if (active < 0) active = 0;
+    });
+    // 等本帧重建完成、输入框解除绑定后再释放控制器。
+    WidgetsBinding.instance.addPostFrameCallback((_) => removed.dispose());
+  }
+
   Widget _field(
     TextEditingController controller,
     String label, {
@@ -322,3 +418,22 @@ JwtSigner _importKey(Map<String, Object> value) => JwtSigner.import(
   keyPassword: value['keyPassword'] as String,
   alias: value['alias'] as String,
 );
+
+/// 单个环境的输入框组。
+class _EnvFields {
+  final TextEditingController name, base, web;
+  _EnvFields(Environment value)
+    : name = TextEditingController(text: value.name),
+      base = TextEditingController(text: value.baseUrl),
+      web = TextEditingController(text: value.webBaseUrl);
+  Environment get value => Environment(
+    name: name.text.trim(),
+    baseUrl: base.text.trim().replaceAll(RegExp(r'/+$'), ''),
+    webBaseUrl: web.text.trim().replaceAll(RegExp(r'/+$'), ''),
+  );
+  void dispose() {
+    name.dispose();
+    base.dispose();
+    web.dispose();
+  }
+}

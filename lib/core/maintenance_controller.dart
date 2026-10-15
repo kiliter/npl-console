@@ -33,6 +33,10 @@ class CallLog {
     if (path.endsWith(MaintenanceController.bizDownloadEndpoint)) {
       return '全量报文下载';
     }
+    if (path.endsWith(MaintenanceController.logListEndpoint)) return '日志文件列表';
+    if (path.endsWith(MaintenanceController.logDownloadEndpoint)) {
+      return '日志文件分片下载';
+    }
     return path;
   }
 
@@ -51,6 +55,10 @@ class MaintenanceController extends ChangeNotifier {
   /// 由 uploadFile 独立构造 multipart 请求，且必须先完成本地备份与多级确认。
   static const obsUploadEndpoint = '/test/look';
   static const bizDownloadEndpoint = '/agapi/biz/downloadBiz';
+
+  /// 日志文件接口（npl-js LogFileController）：只读列表与 1.5MB 分片下载。
+  static const logListEndpoint = '/log-file/list';
+  static const logDownloadEndpoint = '/log-file/download';
   final http.Client Function() clientFactory;
   final String Function()? testToken;
   ConnectionSettings settings = const ConnectionSettings();
@@ -120,20 +128,39 @@ class MaintenanceController extends ChangeNotifier {
     if (key != null) await keyVault.write(key);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('connection', jsonEncode(next.toJson()));
-    _start();
-    cache.clear();
-    cacheHits = 0;
+    _clearResults();
     settings = next;
     signer = key;
     keyPersisted = key != null;
+    message = key == null ? '设置已保存，请导入密钥库。' : '设置已保存，密钥已存入系统安全存储，下次启动自动恢复。';
+    notifyListeners();
+  }
+
+  /// 切换当前环境：只改变下标并持久化，同时清空结果与缓存，避免旧环境数据混入新环境。
+  Future<void> selectEnvironment(int index) async {
+    if (index == settings.active) return;
+    final next = settings.withActive(index);
+    next.validate();
+    _keyRevision++;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('connection', jsonEncode(next.toJson()));
+    _clearResults();
+    settings = next;
+    message = '已切换到环境「${next.current.name}」，请重新查询。';
+    notifyListeners();
+  }
+
+  /// 配置或环境变化后终止请求并清空结果，后续查询全部走新地址。
+  void _clearResults() {
+    _start();
+    cache.clear();
+    cacheHits = 0;
     works = [];
     work = null;
     linkedRecords = [];
     assets = [];
     category = Category.work;
     busy = false;
-    message = key == null ? '设置已保存，请导入密钥库。' : '设置已保存，密钥已存入系统安全存储，下次启动自动恢复。';
-    notifyListeners();
   }
 
   /// 用户主动移除时先删除安全条目，再停止请求并释放当前签名器。
@@ -331,23 +358,63 @@ class MaintenanceController extends ChangeNotifier {
       elapsed.stop();
       // 完整文本用于后续字段体积分析；文件响应仅记录大小与类型，不写二进制。
       // 显式挑选字段，避免将包含 JWT 的 request.headers 序列化到磁盘。
-      await logStore.append({
+      await _persist(
+        log,
+        elapsed.elapsedMilliseconds,
+        binary
+            ? 'application/x-www-form-urlencoded;charset=UTF-8'
+            : 'application/json',
+      );
+      notifyListeners();
+    }
+  }
+
+  /// 显式挑选字段，避免将包含 JWT 的请求头序列化到磁盘。
+  Future<void> _persist(CallLog log, int durationMs, String contentType) =>
+      logStore.append({
         'event': 'request_complete',
         'time': log.time.toIso8601String(),
         'label': log.label,
         'method': 'POST',
         'url': log.url,
-        'contentType': binary
-            ? 'application/x-www-form-urlencoded;charset=UTF-8'
-            : 'application/json',
+        'contentType': contentType,
         'requestBody': log.requestBody,
         'status': log.status,
         'state': log.state,
-        'durationMs': elapsed.elapsedMilliseconds,
+        'durationMs': durationMs,
         'response': log.response,
       });
-      notifyListeners();
+
+  /// 日志文件接口复用同一套 JWT 与接口记录；出口只放行列表和分片下载两个只读端点。
+  ({String token, CallLog log}) beginLogFileCall(
+    String endpoint,
+    Uri uri,
+    String requestBody,
+    String contentType,
+  ) {
+    if (![logListEndpoint, logDownloadEndpoint].contains(endpoint)) {
+      throw const FormatException('拒绝调用非查询接口');
     }
+    settings.validate();
+    if (signer == null && testToken == null) {
+      throw const FormatException('请先在设置中导入 JKS 或 PKCS#8 私钥');
+    }
+    final token =
+        testToken?.call() ?? signer!.token(settings.loginNo, settings.channel);
+    final log = CallLog(
+      uri.toString(),
+      requestBody,
+      false,
+      contentType: contentType,
+    );
+    logs.insert(0, log);
+    notifyListeners();
+    return (token: token, log: log);
+  }
+
+  Future<void> finishLogFileCall(CallLog log, int durationMs) async {
+    await _persist(log, durationMs, log.contentType ?? 'application/json');
+    notifyListeners();
   }
 
   Future<List<Record>> _list(
@@ -594,18 +661,17 @@ class MaintenanceController extends ChangeNotifier {
     notifyListeners();
     final client = _client!;
     try {
-      final request =
-          http.MultipartRequest('POST', uri)
-            ..followRedirects = false
-            ..headers.addAll({'kkk': token, 'agAuthorization': token})
-            ..fields.addAll({
-              'bucketName': bucketName,
-              'objectName': objectName,
-              'ext8': ext8,
-            })
-            ..files.add(
-              http.MultipartFile.fromBytes('file', bytes, filename: fileName),
-            );
+      final request = http.MultipartRequest('POST', uri)
+        ..followRedirects = false
+        ..headers.addAll({'kkk': token, 'agAuthorization': token})
+        ..fields.addAll({
+          'bucketName': bucketName,
+          'objectName': objectName,
+          'ext8': ext8,
+        })
+        ..files.add(
+          http.MultipartFile.fromBytes('file', bytes, filename: fileName),
+        );
       final response = await http.Response.fromStream(
         await client.send(request),
       ).timeout(const Duration(seconds: 60));
@@ -635,19 +701,7 @@ class MaintenanceController extends ChangeNotifier {
       throw FormatException(_errorText(exception));
     } finally {
       elapsed.stop();
-      await logStore.append({
-        'event': 'request_complete',
-        'time': log.time.toIso8601String(),
-        'label': log.label,
-        'method': 'POST',
-        'url': log.url,
-        'contentType': 'multipart/form-data',
-        'requestBody': log.requestBody,
-        'status': log.status,
-        'state': log.state,
-        'durationMs': elapsed.elapsedMilliseconds,
-        'response': log.response,
-      });
+      await _persist(log, elapsed.elapsedMilliseconds, 'multipart/form-data');
       notifyListeners();
     }
   }

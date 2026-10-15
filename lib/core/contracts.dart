@@ -3,42 +3,159 @@ import 'dart:typed_data';
 
 typedef Record = Map<String, dynamic>;
 
+/// 一个可切换的后台环境：服务地址必填，web 地址仅日志文件功能使用（可选）。
+class Environment {
+  final String name, baseUrl, webBaseUrl;
+  const Environment({this.name = '', this.baseUrl = '', this.webBaseUrl = ''});
+  Map<String, String> toJson() => {
+    'name': name,
+    'baseUrl': baseUrl,
+    'webBaseUrl': webBaseUrl,
+  };
+  factory Environment.fromJson(Map json) => Environment(
+    name: json['name']?.toString() ?? '',
+    baseUrl: json['baseUrl']?.toString() ?? '',
+    webBaseUrl: json['webBaseUrl']?.toString() ?? '',
+  );
+}
+
 /// 持久化配置不包含密码、JWT 或私钥。
+/// 支持多个环境：默认构造兼容旧的单 baseUrl 写法，[ConnectionSettings.multi] 用于多环境。
+// 命名参数无法写成私有字段的初始化形参，因此关闭该提示。
+// ignore_for_file: prefer_initializing_formals
 class ConnectionSettings {
-  final String baseUrl, bucket, loginNo, channel;
+  final String bucket, loginNo, channel;
+
+  /// 当前环境下标；越界时由 [validate] 拒绝。
+  final int active;
+  final List<Environment>? _environments;
+  final String _baseUrl, _webBaseUrl;
   const ConnectionSettings({
-    this.baseUrl = '',
+    String baseUrl = '',
+    String webBaseUrl = '',
     this.bucket = '',
     this.loginNo = '',
     this.channel = '',
-  });
-  Map<String, String> toJson() => {
-    'baseUrl': baseUrl,
+  }) : _baseUrl = baseUrl,
+       _webBaseUrl = webBaseUrl,
+       _environments = null,
+       active = 0;
+  const ConnectionSettings.multi({
+    required List<Environment> environments,
+    this.active = 0,
+    this.bucket = '',
+    this.loginNo = '',
+    this.channel = '',
+  }) : _environments = environments,
+       _baseUrl = '',
+       _webBaseUrl = '';
+
+  List<Environment> get environments =>
+      _environments ??
+      [Environment(name: '默认环境', baseUrl: _baseUrl, webBaseUrl: _webBaseUrl)];
+
+  Environment get current {
+    final list = environments;
+    return active >= 0 && active < list.length
+        ? list[active]
+        : const Environment();
+  }
+
+  String get baseUrl => current.baseUrl;
+  String get webBaseUrl => current.webBaseUrl;
+
+  /// 切换环境只改变下标，工号、渠道与桶覆盖保持全局。
+  ConnectionSettings withActive(int index) => ConnectionSettings.multi(
+    environments: environments,
+    active: index,
+    bucket: bucket,
+    loginNo: loginNo,
+    channel: channel,
+  );
+
+  Map<String, Object> toJson() => {
+    'environments': [for (final item in environments) item.toJson()],
+    'active': active,
     'bucket': bucket,
     'loginNo': loginNo,
     'channel': channel,
   };
-  factory ConnectionSettings.fromJson(Record json) => ConnectionSettings(
-    baseUrl: json['baseUrl']?.toString() ?? '',
-    bucket: json['bucket']?.toString() ?? '',
-    loginNo: json['loginNo']?.toString() ?? '',
-    channel: json['channel']?.toString() ?? '',
-  );
+
+  /// 兼容旧版仅保存单个 baseUrl 的配置。
+  factory ConnectionSettings.fromJson(Record json) {
+    final raw = json['environments'];
+    final list = raw is List
+        ? raw.whereType<Map>().map(Environment.fromJson).toList()
+        : [
+            Environment(
+              name: '默认环境',
+              baseUrl: json['baseUrl']?.toString() ?? '',
+            ),
+          ];
+    final index = json['active'] is int ? json['active'] as int : 0;
+    return ConnectionSettings.multi(
+      environments: list,
+      active: list.isEmpty ? 0 : index.clamp(0, list.length - 1),
+      bucket: json['bucket']?.toString() ?? '',
+      loginNo: json['loginNo']?.toString() ?? '',
+      channel: json['channel']?.toString() ?? '',
+    );
+  }
+
   void validate() {
-    final uri = Uri.tryParse(baseUrl);
+    final list = environments;
+    if (list.isEmpty) throw const FormatException('请至少配置一个环境');
+    if (active < 0 || active >= list.length) {
+      throw const FormatException('请选择当前使用的环境');
+    }
+    final names = <String>{};
+    for (final item in list) {
+      if (item.name.trim().isEmpty) throw const FormatException('环境名称不能为空');
+      if (!names.add(item.name.trim())) {
+        throw FormatException('环境名称重复：${item.name}');
+      }
+      _checkUrl(item.baseUrl, '${item.name} 服务地址');
+      if (item.webBaseUrl.isNotEmpty) {
+        _checkUrl(item.webBaseUrl, '${item.name} web 地址');
+      }
+    }
+    if (loginNo.isEmpty || channel.isEmpty) {
+      throw const FormatException('请填写 JWT 工号及渠道');
+    }
+  }
+
+  static void _checkUrl(String value, String label) {
+    final uri = Uri.tryParse(value);
     if (uri == null ||
         !['http', 'https'].contains(uri.scheme) ||
         uri.host.isEmpty ||
         uri.userInfo.isNotEmpty ||
         uri.hasQuery ||
         uri.hasFragment) {
-      throw const FormatException(
-        '服务地址必须是 HTTP/HTTPS 地址，可包含上下文路径，但不能包含密码、查询参数或片段',
+      throw FormatException(
+        '$label 必须是 HTTP/HTTPS 地址，可包含上下文路径，但不能包含密码、查询参数或片段',
       );
     }
-    if (loginNo.isEmpty || channel.isEmpty) {
-      throw const FormatException('请填写 JWT 工号及渠道');
+  }
+}
+
+/// 日志文件所属应用：服务（npl-service）或 web（npl-web）。
+enum LogApp { server, web }
+
+extension LogAppName on LogApp {
+  String get label => this == LogApp.server ? '服务' : 'web';
+
+  /// 解析当前环境对应的地址；web 地址未配置时给出明确提示。
+  String baseUrl(ConnectionSettings settings) {
+    final value = this == LogApp.server
+        ? settings.baseUrl
+        : settings.webBaseUrl;
+    if (value.isEmpty) {
+      throw FormatException(
+        '当前环境「${settings.current.name}」未配置 $label 地址，请在设置中填写',
+      );
     }
+    return value.replaceAll(RegExp(r'/+$'), '');
   }
 }
 
@@ -105,12 +222,8 @@ extension TableKindName on TableKind {
       ['WO_INFO', 'WO_BIZ_INFO', 'WO_SIGN_INFO', 'WO_PIC_INFO'][index];
 
   /// 复用的只读查询接口类别。
-  Category get category => [
-    Category.work,
-    Category.message,
-    Category.sign,
-    Category.picture,
-  ][index];
+  Category get category =>
+      [Category.work, Category.message, Category.sign, Category.picture][index];
 
   /// 图片序号条件仅适用于图片表。
   bool get hasPicSeq => this == TableKind.wopicinfo;
@@ -129,7 +242,10 @@ Record tableQueryBody(
   sysAccept = sysAccept.trim();
   opMonth = opMonth.trim();
   picSeq = picSeq.trim();
-  if (caseNo.isEmpty && sysAccept.isEmpty && opMonth.isEmpty && picSeq.isEmpty) {
+  if (caseNo.isEmpty &&
+      sysAccept.isEmpty &&
+      opMonth.isEmpty &&
+      picSeq.isEmpty) {
     throw const FormatException('请至少填写一个查询条件');
   }
   if (caseNo.isEmpty && sysAccept.isNotEmpty && opMonth.isEmpty) {
