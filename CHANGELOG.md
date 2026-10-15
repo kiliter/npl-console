@@ -1,5 +1,13 @@
 # 版本日志
 
+## v1.4.1 · 2026-10-15
+
+修复 v1.4.0 在 CI 上 macOS 与 Windows 构建失败，功能与 v1.4.0 相同。
+
+- macOS：Xcode 26 下 flutter_inappwebview_macos 的 SPM 最低版本与接口可用性不一致导致编译失败，CI 构建前修正为 macOS 10.15。
+- Windows：MSVC 14.51 将 flutter_inappwebview_windows 使用的实验协程头视为错误，CMake 增加官方静默宏。
+- 包含 v1.4.0 全部功能：日志文件下载、批量下载、多环境切换与内置门户网页。
+
 ## v1.4.0 · 2026-10-15
 
 新增日志文件下载、多环境切换与内置门户网页。

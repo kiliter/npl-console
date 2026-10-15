@@ -60,6 +60,11 @@ jobs:
       shell: bash
       run: |-
         flutter pub get
+        # flutter_inappwebview_macos 6.2.0-beta.3 的 SPM 最低版本为 10.14，
+        # 但 presentationAnchor 仅标注 10.15 可用，Xcode 26 会判定协议一致性不满足而编译失败。
+        PKG=$(ls "${PUB_CACHE:-$HOME/.pub-cache}"/hosted/pub.dev/flutter_inappwebview_macos-1.2.0-beta.3/macos/flutter_inappwebview_macos/Package.swift)
+        sed -i '' 's/\.macOS("10.14")/.macOS("10.15")/' "$PKG"
+        grep -q '.macOS("10.15")' "$PKG" || { echo 'flutter_inappwebview_macos 最低版本修正失败'; exit 1; }
         printf 'CODE_SIGNING_ALLOWED=NO\nCODE_SIGNING_REQUIRED=NO\n' > "$RUNNER_TEMP/unsigned.xcconfig"
         XCODE_XCCONFIG_FILE="$RUNNER_TEMP/unsigned.xcconfig" flutter build macos --release -t lib/main.dart --build-name "$VERSION" --build-number "$GITHUB_RUN_NUMBER"
         flutter analyze --no-pub
