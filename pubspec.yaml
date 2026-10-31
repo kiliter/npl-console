@@ -1,5 +1,5 @@
 name: npl_maintenance
-description: "无纸化维护中心：四端原生只读工单与文件查询工具。"
+description: "无纸化维护中心：四端原生工单、文件查询与 PDF 编辑工具。"
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -42,6 +42,9 @@ dependencies:
   shared_preferences: ^2.5.5
   file_picker: ^12.3.0
   pdfrx: ^2.4.8
+  pdfium_dart: 0.2.5
+  ffi: ^2.1.4
+  image: ^4.5.4
   crypto: ^3.0.7
   pointycastle: ^4.0.0
   xml: ^7.0.1
@@ -78,6 +81,9 @@ flutter:
   # the material Icons class.
   uses-material-design: true
   assets:
+    - assets/fonts/NotoSansSC-Regular.ttf
+    - assets/fonts/NotoSansSC.cmap.json
+    - assets/fonts/OFL.txt
     - assets/branding/app-icon.png
 
   # To add assets to your application, add an assets section, like this:

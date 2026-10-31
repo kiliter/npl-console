@@ -23,18 +23,22 @@ void main() {
     return path;
   }
 
-  test('旧偏好中的 flutter.* 键搬回，系统键不迁移', () async {
-    SharedPreferences.setMockInitialValues({});
-    final prefs = await SharedPreferences.getInstance();
-    final path = await writePlist({
-      'flutter.connection': '{"baseUrl":"https://x"}',
-      'flutter.github_proxy_v1': 'https://ghproxy.net/',
-      'NSNavPanelExpandedSizeForOpenMode': '{880, 448}',
-    });
-    await migrateSandboxPreferences(legacyPlistPath: path, prefs: prefs);
-    expect(prefs.getString('connection'), '{"baseUrl":"https://x"}');
-    expect(prefs.getString('github_proxy_v1'), 'https://ghproxy.net/');
-  });
+  test(
+    '旧偏好中的 flutter.* 键搬回，系统键不迁移',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+      final path = await writePlist({
+        'flutter.connection': '{"baseUrl":"https://x"}',
+        'flutter.github_proxy_v1': 'https://ghproxy.net/',
+        'NSNavPanelExpandedSizeForOpenMode': '{880, 448}',
+      });
+      await migrateSandboxPreferences(legacyPlistPath: path, prefs: prefs);
+      expect(prefs.getString('connection'), '{"baseUrl":"https://x"}');
+      expect(prefs.getString('github_proxy_v1'), 'https://ghproxy.net/');
+    },
+    skip: !Platform.isMacOS ? 'macOS plist 迁移依赖系统 plutil' : false,
+  );
 
   test('新位置已有连接配置时不覆盖', () async {
     SharedPreferences.setMockInitialValues({
@@ -46,7 +50,7 @@ void main() {
     });
     await migrateSandboxPreferences(legacyPlistPath: path, prefs: prefs);
     expect(prefs.getString('connection'), '{"baseUrl":"https://new"}');
-  });
+  }, skip: !Platform.isMacOS ? 'macOS plist 迁移依赖系统 plutil' : false);
 
   test('旧偏好文件不存在时静默跳过', () async {
     SharedPreferences.setMockInitialValues({});

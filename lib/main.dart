@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'core/maintenance_controller.dart';
 import 'core/settings_migration.dart';
 import 'core/update_check.dart';
+import 'core/pdf_editor/edit_session.dart';
 import 'ui/maintenance_screen.dart';
 import 'ui/update_dialog.dart';
 
@@ -16,7 +17,12 @@ void main() {
 
 class MaintenanceApp extends StatefulWidget {
   final MaintenanceController controller;
-  const MaintenanceApp({super.key, required this.controller});
+  final PdfEditSession? editorSession;
+  const MaintenanceApp({
+    super.key,
+    required this.controller,
+    this.editorSession,
+  });
   @override
   State<MaintenanceApp> createState() => _MaintenanceAppState();
 }
@@ -103,6 +109,9 @@ class _MaintenanceAppState extends State<MaintenanceApp> {
         ),
       ),
     ),
-    home: MaintenanceScreen(controller: widget.controller),
+    home: MaintenanceScreen(
+      controller: widget.controller,
+      editorSession: widget.editorSession,
+    ),
   );
 }

@@ -16,6 +16,8 @@ import 'table_query_sheet.dart';
 import 'web_page.dart';
 import 'work_details.dart';
 import 'logs_dialog.dart';
+import 'pdf_editor/pdf_editor_screen.dart';
+import '../core/pdf_editor/edit_session.dart';
 
 const ink = Color(0xff1b2b42),
     muted = Color(0xff8192a9),
@@ -33,7 +35,12 @@ const sectionIcons = [
 /// 桌面结果、字段、纸张并排；手机独立搜索和详情，共用原有只读业务控制器。
 class MaintenanceScreen extends StatefulWidget {
   final MaintenanceController controller;
-  const MaintenanceScreen({super.key, required this.controller});
+  final PdfEditSession? editorSession;
+  const MaintenanceScreen({
+    super.key,
+    required this.controller,
+    this.editorSession,
+  });
   @override
   State<MaintenanceScreen> createState() => _MaintenanceScreenState();
 }
@@ -44,6 +51,8 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
   final history = <QueryDraft>[];
   String filter = '';
   int section = 0;
+  bool editorTab = false, editorOpened = false;
+  late final editorSession = widget.editorSession ?? PdfEditSession();
   bool get mobile => isMobileWidth(MediaQuery.sizeOf(context).width);
   @override
   void initState() {
@@ -58,6 +67,7 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
   @override
   void dispose() {
     c.removeListener(update);
+    if (widget.editorSession == null) editorSession.dispose();
     super.dispose();
   }
 
@@ -96,10 +106,36 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
     }
   }
 
-  void settings() => showDialog<void>(
-    context: context,
-    builder: (_) => SettingsDialog(controller: c),
-  );
+  Future<bool> confirmEditorConnectionChange() async {
+    if (editorSession.target?.dirty != true) return true;
+    return await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('单据编辑尚未保存'),
+            content: const Text('更改连接会清空当前编辑和共享素材，请先保存副本。'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('返回保存'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('继续更改连接'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+  }
+
+  Future<void> settings() async {
+    if (!await confirmEditorConnectionChange() || !mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (_) => SettingsDialog(controller: c),
+    );
+  }
+
   void logs() => showDialog<void>(
     context: context,
     builder: (_) => LogsDialog(controller: c),
@@ -151,6 +187,11 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
 
   /// 切换环境后结果与缓存清空，失败原因写入状态条。
   Future<void> switchEnvironment(int index) async {
+    if (index == c.settings.active ||
+        !await confirmEditorConnectionChange() ||
+        !mounted) {
+      return;
+    }
     try {
       await c.selectEnvironment(index);
     } catch (e) {
@@ -228,7 +269,7 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
     },
     child: Focus(
       child: Scaffold(
-        bottomNavigationBar: mobile && c.work != null
+        bottomNavigationBar: !editorTab && mobile && c.work != null
             ? NavigationBar(
                 height: 66,
                 selectedIndex: section,
@@ -246,19 +287,111 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
         body: SafeArea(
           child: Column(
             children: [
-              header(),
+              if (editorTab) editorHeader() else header(),
+              if (!editorTab)
+                Container(
+                  color: Colors.white,
+                  child: Row(
+                    children: [
+                      tab('工单查询', false, Icons.search),
+                      tab('在线单据编辑', true, Icons.edit_document),
+                    ],
+                  ),
+                ),
               // 状态行移动端独立成行；桌面端已并入顶栏，仅保留查询进度条。
-              if (mobile) status(),
+              if (mobile && !editorTab) status(),
               if (!mobile && c.querying)
                 LinearProgressIndicator(
                   value: c.total == 0 ? null : c.completed / c.total,
                   minHeight: 3,
                 ),
-              Expanded(child: mobile ? mobileBody() : desktopBody()),
+              Expanded(
+                child: IndexedStack(
+                  index: editorTab ? 1 : 0,
+                  children: [
+                    mobile ? mobileBody() : desktopBody(),
+                    if (editorOpened)
+                      PdfEditorScreen(controller: c, session: editorSession)
+                    else
+                      const SizedBox(),
+                  ],
+                ),
+              ),
             ],
           ),
         ),
       ),
+    ),
+  );
+  Widget tab(String label, bool editor, IconData icon) => Container(
+    decoration: BoxDecoration(
+      border: Border(
+        bottom: BorderSide(
+          color: editorTab == editor ? blue : Colors.transparent,
+          width: 3,
+        ),
+      ),
+    ),
+    child: TextButton.icon(
+      key: ValueKey(editor ? 'online-editor-tab' : 'work-query-tab'),
+      onPressed: () => setState(() {
+        editorTab = editor;
+        editorOpened |= editor;
+      }),
+      icon: Icon(icon, size: 17),
+      label: Text(label),
+      style: TextButton.styleFrom(
+        foregroundColor: editorTab == editor ? blue : muted,
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+      ),
+    ),
+  );
+  Widget editorHeader() => Container(
+    color: Colors.white,
+    padding: EdgeInsets.symmetric(horizontal: mobile ? 8 : 24, vertical: 4),
+    child: Row(
+      children: [
+        if (mobile)
+          IconButton(
+            tooltip: '返回工单查询',
+            onPressed: () => setState(() => editorTab = false),
+            icon: const Icon(Icons.arrow_back_ios_new, size: 19),
+          )
+        else
+          Image.asset('assets/branding/app-icon.png', width: 30, height: 30),
+        const SizedBox(width: 10),
+        if (mobile)
+          const Expanded(
+            child: Text(
+              '在线单据编辑',
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w700,
+                color: ink,
+              ),
+            ),
+          )
+        else ...[
+          const Text(
+            '无纸化维护中心',
+            style: TextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.w700,
+              color: ink,
+            ),
+          ),
+          const SizedBox(width: 32),
+          tab('工单查询', false, Icons.search),
+          tab('在线单据编辑', true, Icons.edit_document),
+          const Spacer(),
+        ],
+        environmentMenu(),
+        IconButton(
+          tooltip: '设置',
+          onPressed: settings,
+          icon: const Icon(Icons.tune, size: 20),
+        ),
+      ],
     ),
   );
   Widget header() => Container(

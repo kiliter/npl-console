@@ -522,6 +522,39 @@ class MaintenanceController extends ChangeNotifier {
     }
   }
 
+  /// 编辑器独立加载单据；不清空查询页结果，不自动选择工单，也不执行上传。
+  Future<({Record work, Uint8List bytes})> loadEditorPdf(String caseNo) async {
+    caseNo = caseNo.trim();
+    if (caseNo.isEmpty) throw const FormatException('请输入单据号');
+    _client ??= clientFactory();
+    final ticket = _generation;
+    final rows = await _list(
+      Category.work.endpoint,
+      {'caseNo': caseNo},
+      ticket,
+      forceRefresh: true,
+    );
+    final matches = rows.where((row) => '${row['caseNo']}' == caseNo).toList();
+    if (matches.length != 1) {
+      throw FormatException(
+        matches.isEmpty ? '未找到单据 $caseNo' : '单据号对应多条记录，请核对单据号',
+      );
+    }
+    final selected = matches.single;
+    final file = Asset.fromRecords(Category.work, [], selected).single;
+    final response = await request(
+      obsEndpoint,
+      file.obsBody(selected, settings),
+      ticket,
+      binary: true,
+      forceRefresh: true,
+    );
+    if (detectType(response.bodyBytes, 'pdf') != 'pdf') {
+      throw const FormatException('单据文件不是有效 PDF，请查看接口记录');
+    }
+    return (work: selected, bytes: response.bodyBytes);
+  }
+
   /// 下载全量报文（WoBizController#downloadBiz）：仅传 caseNo，服务端返回
   /// {result, data, desc, details}，result 为 0 时 data 即全量报文内容；
   /// data 是被转义的 JSON 字符串，且可能嵌套多层 {result, data} 信封，需逐层还原。

@@ -1,0 +1,6 @@
+Noto Sans SC, from the Noto CJK project (https://github.com/notofonts/noto-cjk).
+Source: Sans/Variable/TTF/Subset/NotoSansSC-VF.ttf
+Distributed under the SIL Open Font License 1.1 (see OFL.txt).
+The bundled TTF is the wght=400 static instance, generated with fontTools.
+NotoSansSC.cmap.json is generated from this TTF's best Unicode cmap.
+Do not update either file without regenerating its paired data.
