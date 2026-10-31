@@ -225,8 +225,9 @@ extension TableKindName on TableKind {
   Category get category =>
       [Category.work, Category.message, Category.sign, Category.picture][index];
 
-  /// 图片序号条件仅适用于图片表。
+  /// 图片表的受理流水通过 picSeq 查询，其余表通过 sysAccept 查询。
   bool get hasPicSeq => this == TableKind.wopicinfo;
+  String get acceptanceField => hasPicSeq ? 'picSeq' : 'sysAccept';
 }
 
 /// 构造按表查询请求体：只放入非空条件；opMonth 由 YYYY-MM 转为 YYYYMM，
@@ -242,32 +243,30 @@ Record tableQueryBody(
   sysAccept = sysAccept.trim();
   opMonth = opMonth.trim();
   picSeq = picSeq.trim();
-  if (caseNo.isEmpty &&
-      sysAccept.isEmpty &&
-      opMonth.isEmpty &&
-      picSeq.isEmpty) {
+  if (picSeq.isNotEmpty && !table.hasPicSeq) {
+    throw const FormatException('picSeq 受理流水仅适用于图片表');
+  }
+  if (table.hasPicSeq &&
+      picSeq.isNotEmpty &&
+      sysAccept.isNotEmpty &&
+      picSeq != sysAccept) {
+    throw const FormatException('图片表的受理流水条件不一致');
+  }
+  final acceptance = table.hasPicSeq && picSeq.isNotEmpty ? picSeq : sysAccept;
+  if (caseNo.isEmpty && acceptance.isEmpty && opMonth.isEmpty) {
     throw const FormatException('请至少填写一个查询条件');
   }
-  if (caseNo.isEmpty && sysAccept.isNotEmpty && opMonth.isEmpty) {
+  if (caseNo.isEmpty && acceptance.isNotEmpty && opMonth.isEmpty) {
     throw const FormatException('按受理流水查询请选择业务月份');
   }
   final body = <String, dynamic>{};
   if (caseNo.isNotEmpty) body['caseNo'] = caseNo;
-  if (sysAccept.isNotEmpty) body['sysAccept'] = sysAccept;
+  if (acceptance.isNotEmpty) body[table.acceptanceField] = acceptance;
   if (opMonth.isNotEmpty) {
     if (!RegExp(r'^\d{4}-(0[1-9]|1[0-2])$').hasMatch(opMonth)) {
       throw const FormatException('月份格式应为 YYYY-MM，例如 2026-09');
     }
     body['opMonth'] = opMonth.replaceAll('-', '');
-  }
-  if (picSeq.isNotEmpty) {
-    if (!table.hasPicSeq) {
-      throw const FormatException('图片序号仅适用于图片表');
-    }
-    if (!RegExp(r'^\d+$').hasMatch(picSeq) || int.parse(picSeq) <= 0) {
-      throw const FormatException('图片序号应为正整数');
-    }
-    body['picSeq'] = picSeq;
   }
   return body;
 }

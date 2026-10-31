@@ -29,7 +29,7 @@ void main() {
       {'caseNo': 'CASE'},
     ]);
   });
-  test('按表查询仅保留非空条件，月份转分表格式，图片序号限定图片表', () {
+  test('按表查询仅保留非空条件，月份转分表格式，图片表受理流水使用 picSeq', () {
     expect(tableQueryBody(TableKind.woinfo, caseNo: 'CASE'), {
       'caseNo': 'CASE',
     });
@@ -60,11 +60,36 @@ void main() {
       throwsFormatException,
     );
     expect(
-      () => tableQueryBody(TableKind.wopicinfo, caseNo: 'CASE', picSeq: 'abc'),
+      tableQueryBody(
+        TableKind.wopicinfo,
+        sysAccept: ' FLOW-001 ',
+        opMonth: '2026-10',
+      ),
+      {'picSeq': 'FLOW-001', 'opMonth': '202610'},
+    );
+    expect(
+      tableQueryBody(
+        TableKind.wopicinfo,
+        picSeq: '000202610310000000000000003',
+        opMonth: '2026-10',
+      ),
+      {'picSeq': '000202610310000000000000003', 'opMonth': '202610'},
+    );
+    expect(
+      () => tableQueryBody(TableKind.wopicinfo, sysAccept: 'FLOW'),
       throwsFormatException,
     );
     expect(
-      () => tableQueryBody(TableKind.wopicinfo, caseNo: 'CASE', picSeq: '0'),
+      () => tableQueryBody(TableKind.wopicinfo, picSeq: 'FLOW'),
+      throwsFormatException,
+    );
+    expect(
+      () => tableQueryBody(
+        TableKind.wopicinfo,
+        caseNo: 'CASE',
+        sysAccept: 'A',
+        picSeq: 'B',
+      ),
       throwsFormatException,
     );
   });

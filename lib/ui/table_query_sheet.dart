@@ -18,7 +18,6 @@ class TableQuerySheet extends StatefulWidget {
 class _TableQuerySheetState extends State<TableQuerySheet> {
   final caseNo = TextEditingController();
   final sysAccept = TextEditingController();
-  final picSeq = TextEditingController();
   TableKind table = TableKind.woinfo;
   DateTime? month;
   String? error;
@@ -28,7 +27,6 @@ class _TableQuerySheetState extends State<TableQuerySheet> {
   void dispose() {
     caseNo.dispose();
     sysAccept.dispose();
-    picSeq.dispose();
     super.dispose();
   }
 
@@ -46,7 +44,6 @@ class _TableQuerySheetState extends State<TableQuerySheet> {
         caseNo: caseNo.text,
         sysAccept: sysAccept.text,
         opMonth: monthText,
-        picSeq: table.hasPicSeq ? picSeq.text : '',
       );
     } on FormatException catch (e) {
       setState(() => error = e.message);
@@ -233,15 +230,6 @@ class _TableQuerySheetState extends State<TableQuerySheet> {
                         ],
                       ],
                     ),
-                    if (table.hasPicSeq) ...[
-                      const SizedBox(height: 18),
-                      conditionField(
-                        '图片序号',
-                        picSeq,
-                        hint: '正整数，仅图片表可用',
-                        number: true,
-                      ),
-                    ],
                     const SizedBox(height: 12),
                     const Text(
                       '至少填写一个条件；单据号可单独查询，受理流水需搭配业务月份。',

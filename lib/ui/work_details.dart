@@ -117,7 +117,7 @@ const fieldLabels = {
   'signNum': '签字数量',
   'photoNum': '图片数量',
   'cardNum': '证件图片数',
-  'picSeq': '图片序号',
+  'picSeq': '受理流水',
   'isPreControl': '是否预控',
   'isAgainCreate': '是否重新生成',
   'cdFlag': '处理标记',

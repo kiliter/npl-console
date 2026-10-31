@@ -1,3 +1,6 @@
+import 'package:npl_maintenance/core/request_log_store.dart';
+import 'package:flutter/material.dart';
+import 'package:npl_maintenance/ui/table_query_sheet.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
@@ -18,9 +21,12 @@ void main() {
     final controller = MaintenanceController(
       clientFactory: () => MockClient((request) async {
         requests.add(request);
-        return http.Response(jsonEncode([
-          {'caseNo': 'CASE', 'picSeq': '3'},
-        ]), 200);
+        return http.Response(
+          jsonEncode([
+            {'caseNo': 'CASE', 'picSeq': '3'},
+          ]),
+          200,
+        );
       }),
       testToken: () => 'temporary-test-token',
     )..settings = settings;
@@ -42,6 +48,68 @@ void main() {
     expect(controller.logs.single.state, '成功');
     controller.dispose();
   });
+  test('按受理流水查询：图片表只发送 picSeq，其余表仍发送 sysAccept', () async {
+    for (final table in TableKind.values) {
+      http.Request? sent;
+      final c = MaintenanceController(
+        clientFactory: () => MockClient((request) async {
+          sent = request;
+          return http.Response('[]', 200);
+        }),
+        testToken: () => 'test',
+      )..settings = settings;
+      final body = tableQueryBody(
+        table,
+        sysAccept: ' 000202610310000000000000003 ',
+        opMonth: '2026-10',
+      );
+      await c.queryTable(table, body);
+      expect(sent!.url.path, '/npl${table.category.endpoint}');
+      expect(jsonDecode(sent!.body), {
+        table == TableKind.wopicinfo ? 'picSeq' : 'sysAccept':
+            '000202610310000000000000003',
+        'opMonth': '202610',
+      });
+      c.dispose();
+    }
+  });
+  testWidgets('图片表保留一个受理流水输入，实际请求使用 picSeq', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(700, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    http.Request? sent;
+    final c = MaintenanceController(
+      logStore: _MemoryLogStore(),
+      clientFactory: () => MockClient((request) async {
+        sent = request;
+        return http.Response('[]', 200);
+      }),
+      testToken: () => 'test',
+    )..settings = settings;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: TableQuerySheet(controller: c)),
+      ),
+    );
+    await tester.tap(find.text('图片表'));
+    await tester.pumpAndSettle();
+    expect(find.text('受理流水'), findsOneWidget);
+    expect(find.text('图片序号'), findsNothing);
+    await tester.enterText(find.byType(TextField).at(0), 'CASE');
+    await tester.enterText(
+      find.byType(TextField).at(1),
+      '000202610310000000000000003',
+    );
+    await tester.tap(find.text('查询图片表'));
+    await tester.pumpAndSettle();
+    expect(sent!.url.path, '/npl/api/wopic/queryList');
+    expect(jsonDecode(sent!.body), {
+      'caseNo': 'CASE',
+      'picSeq': '000202610310000000000000003',
+    });
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    c.dispose();
+  });
   test('四张表分别映射到既有 queryList 接口', () {
     expect(TableKind.woinfo.category.endpoint, '/api/wo/queryList');
     expect(TableKind.wobizinfo.category.endpoint, '/api/wobiz/queryList');
@@ -52,8 +120,7 @@ void main() {
   });
   test('接口失败抛出可读错误并标记状态，不吞掉失败', () async {
     final controller = MaintenanceController(
-      clientFactory: () =>
-          MockClient((_) async => http.Response('拒绝访问', 403)),
+      clientFactory: () => MockClient((_) async => http.Response('拒绝访问', 403)),
       testToken: () => 'test',
     )..settings = settings;
     await expectLater(
@@ -96,4 +163,9 @@ void main() {
     expect(controller.logs.single.state, '已取消');
     controller.dispose();
   });
+}
+
+class _MemoryLogStore extends RequestLogStore {
+  @override
+  Future<void> append(Map<String, Object?> record) async {}
 }
