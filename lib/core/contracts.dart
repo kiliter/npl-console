@@ -209,21 +209,30 @@ List<Record> queryBodies(
   ];
 }
 
-/// 数据查询支持的四张业务表，分别复用现有只读接口，不新增后端接口。
+/// 数据查询支持的业务表，分别复用现有只读接口，不新增后端接口。
 /// 命名为 TableKind 以避免与 Flutter 的 DataTable 控件冲突。
-enum TableKind { woinfo, wobizinfo, wosigninfo, wopicinfo }
+enum TableKind { woinfo, wobizinfo, wosigninfo, wopicinfo, interResult }
 
 extension TableKindName on TableKind {
   /// 面板展示用的中文名称。
-  String get label => ['工单表', '报文表', '签字表', '图片表'][index];
+  String get label => ['工单表', '报文表', '签字表', '图片表', '接口结果表'][index];
 
   /// 服务端物理表名（按月份分表，此处为基表名）。
-  String get tableName =>
-      ['WO_INFO', 'WO_BIZ_INFO', 'WO_SIGN_INFO', 'WO_PIC_INFO'][index];
+  String get tableName => [
+    'WO_INFO',
+    'WO_BIZ_INFO',
+    'WO_SIGN_INFO',
+    'WO_PIC_INFO',
+    'SYS_INTER_RESULT',
+  ][index];
 
-  /// 复用的只读查询接口类别。
-  Category get category =>
-      [Category.work, Category.message, Category.sign, Category.picture][index];
+  String get endpoint => [
+    Category.work.endpoint,
+    Category.message.endpoint,
+    Category.sign.endpoint,
+    Category.picture.endpoint,
+    '/api/inter/result/queryList',
+  ][index];
 
   /// 图片表的受理流水通过 picSeq 查询，其余表通过 sysAccept 查询。
   bool get hasPicSeq => this == TableKind.wopicinfo;
@@ -238,11 +247,22 @@ Record tableQueryBody(
   String sysAccept = '',
   String opMonth = '',
   String picSeq = '',
+  String interUrl = '',
+  String retCode = '',
 }) {
   caseNo = caseNo.trim();
   sysAccept = sysAccept.trim();
   opMonth = opMonth.trim();
   picSeq = picSeq.trim();
+  interUrl = interUrl.trim();
+  retCode = retCode.trim();
+  if (table == TableKind.interResult && caseNo.isEmpty && sysAccept.isEmpty) {
+    throw const FormatException('接口结果查询请填写单据号或受理流水，避免整月查询');
+  }
+  if (table != TableKind.interResult &&
+      (interUrl.isNotEmpty || retCode.isNotEmpty)) {
+    throw const FormatException('接口标识和返回码仅适用于接口结果表');
+  }
   if (picSeq.isNotEmpty && !table.hasPicSeq) {
     throw const FormatException('picSeq 受理流水仅适用于图片表');
   }
@@ -260,6 +280,8 @@ Record tableQueryBody(
     throw const FormatException('按受理流水查询请选择业务月份');
   }
   final body = <String, dynamic>{};
+  if (interUrl.isNotEmpty) body['interUrl'] = interUrl;
+  if (retCode.isNotEmpty) body['retCode'] = retCode;
   if (caseNo.isNotEmpty) body['caseNo'] = caseNo;
   if (acceptance.isNotEmpty) body[table.acceptanceField] = acceptance;
   if (opMonth.isNotEmpty) {

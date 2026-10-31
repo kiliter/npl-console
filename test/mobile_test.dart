@@ -15,7 +15,10 @@ void main() {
     final c = MaintenanceController();
     await tester.pumpWidget(MaintenanceApp(controller: c));
     expect(find.byType(NavigationBar), findsNothing);
-    await tester.tap(find.byKey(const ValueKey('mobile-search')));
+    await tester.runAsync(() async {
+      await tester.tap(find.byKey(const ValueKey('mobile-search')));
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    });
     await tester.pumpAndSettle();
     expect(find.text('查找工单').hitTestable(), findsOneWidget);
     expect(find.text('单月'), findsOneWidget);

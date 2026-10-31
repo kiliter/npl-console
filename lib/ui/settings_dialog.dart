@@ -126,7 +126,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
           saving = false;
           error = exception is FormatException
               ? exception.message
-              : '设置保存失败，请检查系统钥匙串或安全存储访问权限。';
+              : '设置保存失败，请检查本地 .config 目录访问权限。';
         });
       }
     }
@@ -191,7 +191,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
       if (mounted) {
         setState(() {
           saving = false;
-          error = '移除密钥失败，请检查系统安全存储访问权限。';
+          error = '移除密钥失败，请检查本地配置目录访问权限。';
         });
       }
     }
@@ -246,7 +246,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
             _field(keyPassword, '私钥密码（相同时留空）', obscure: true),
             _field(alias, '私钥别名（单个私钥时留空）'),
             const Text(
-              '密钥安全保存在本机：Mac / iOS 使用钥匙串，Android 使用系统加密存储。下次启动自动恢复，不保存密钥库密码，不上传私钥。',
+              '配置和业务密钥保存在本机 .config/npl-maintenance 目录（桌面位于用户目录，手机位于应用目录）。密钥文件不另设密码，macOS 文件权限为 600；迁移成功后清理旧钥匙串副本。下次启动直接恢复，不保存导入密码。',
               style: TextStyle(
                 fontSize: 12,
                 color: Color(0xff8090a5),

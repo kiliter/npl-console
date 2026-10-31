@@ -54,3 +54,8 @@ dist/
 *.keystore
 *.jks
 !test/fixtures/sample.jks
+
+# 本机安装备份与平台构建缓存
+.app-backup/
+/android/build/
+**/xcshareddata/swiftpm/

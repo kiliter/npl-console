@@ -3,7 +3,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:pointycastle/export.dart';
 
-/// 本地 JKS/PKCS#8 解析及 RS256 签名；由系统安全存储持久保护，签名不使用 Java。
+/// 本地 JKS/PKCS#8 解析及 RS256 签名；由应用私有配置文件持久保存，签名不使用 Java。
 class JwtSigner {
   final RSAPrivateKey _key;
   final String alias;
@@ -19,7 +19,7 @@ class JwtSigner {
     return utf8.decode(engine.process(cipher));
   }
 
-  /// 仅供系统安全存储序列化使用，不得写入普通配置、文件或日志。
+  /// 仅供专用密钥文件序列化使用，不得写入普通配置或日志。
   String toSecureRecord() => jsonEncode({
     'version': 1,
     'alias': alias,

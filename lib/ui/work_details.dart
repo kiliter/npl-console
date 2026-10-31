@@ -90,6 +90,14 @@ bool _hasFieldValue(dynamic value) {
 }
 
 const fieldLabels = {
+  'interUrl': '接口标识',
+  'retCode': '返回码',
+  'retMsg': '返回信息',
+  'retDetail': '返回详情',
+  'paramInt': '请求参数',
+  'createTime': '创建时间',
+  'endTime': '结束时间',
+  'interName': '接口名称',
   'caseNo': '单据号',
   'sysAccept': '受理流水',
   'phoneNo': '手机号码',

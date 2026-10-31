@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart' hide Category;
 import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
+import 'local_config.dart';
 import 'contracts.dart';
 import 'jwt_signer.dart';
 import 'query_cache.dart';
@@ -23,6 +23,7 @@ class CallLog {
   /// 接口中文名，按请求路径识别；baseUrl 可能带上下文路径，故按结尾匹配，未知路径退回原始路径。
   String get label {
     final path = Uri.parse(url).path;
+    if (path.endsWith(TableKind.interResult.endpoint)) return '接口结果查询';
     for (final type in Category.values) {
       if (path.endsWith(type.endpoint)) return '${type.label}查询';
     }
@@ -92,20 +93,22 @@ class MaintenanceController extends ChangeNotifier {
        logStore = logStore ?? RequestLogStore();
 
   Future<void> restore() async {
+    final revision = _keyRevision;
     // 启动即建立日志文件，可在发起第一条请求前确认实际保存位置。
     await logStore.append({
       'event': 'session_start',
       'time': DateTime.now().toIso8601String(),
     });
-    final revision = _keyRevision;
     try {
-      final prefs = await SharedPreferences.getInstance();
+      final prefs = const LocalConfig();
       if (revision != _keyRevision) return;
-      final raw = prefs.getString('connection');
+      final raw = await prefs.getString('connection');
+      if (revision != _keyRevision) return;
       if (raw != null) {
         settings = ConnectionSettings.fromJson(jsonDecode(raw) as Record);
       }
     } catch (_) {
+      if (revision != _keyRevision) return;
       message = '无法读取旧设置，请重新配置服务地址。';
     }
     try {
@@ -113,11 +116,11 @@ class MaintenanceController extends ChangeNotifier {
       if (revision != _keyRevision) return;
       signer = saved;
       keyPersisted = saved != null;
-      if (saved != null) message = '已从系统安全存储恢复密钥，可直接查询。';
+      if (saved != null) message = '已从本地配置目录恢复密钥，可直接查询。';
     } catch (_) {
       if (revision != _keyRevision) return;
       error = true;
-      message = '无法读取系统安全存储中的密钥，请解锁设备或在设置中重试；原密钥不会被删除。';
+      message = '无法读取或迁移本地密钥，请在设置中重试；旧密钥仅在迁移验证成功后清理。';
     }
     notifyListeners();
   }
@@ -126,13 +129,15 @@ class MaintenanceController extends ChangeNotifier {
     next.validate();
     _keyRevision++;
     if (key != null) await keyVault.write(key);
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = const LocalConfig();
     await prefs.setString('connection', jsonEncode(next.toJson()));
     _clearResults();
     settings = next;
     signer = key;
     keyPersisted = key != null;
-    message = key == null ? '设置已保存，请导入密钥库。' : '设置已保存，密钥已存入系统安全存储，下次启动自动恢复。';
+    message = key == null
+        ? '设置已保存，请导入密钥库。'
+        : '设置已保存，密钥已存入本地 .config 目录，下次启动自动恢复。';
     notifyListeners();
   }
 
@@ -142,7 +147,7 @@ class MaintenanceController extends ChangeNotifier {
     final next = settings.withActive(index);
     next.validate();
     _keyRevision++;
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = const LocalConfig();
     await prefs.setString('connection', jsonEncode(next.toJson()));
     _clearResults();
     settings = next;
@@ -251,6 +256,7 @@ class MaintenanceController extends ChangeNotifier {
   }) async {
     if (![
       ...Category.values.map((type) => type.endpoint),
+      TableKind.interResult.endpoint,
       obsEndpoint,
       bizDownloadEndpoint,
     ].contains(endpoint)) {
@@ -296,6 +302,7 @@ class MaintenanceController extends ChangeNotifier {
   }) async {
     if (![
       ...Category.values.map((type) => type.endpoint),
+      TableKind.interResult.endpoint,
       obsEndpoint,
       bizDownloadEndpoint,
     ].contains(endpoint)) {
@@ -508,7 +515,7 @@ class MaintenanceController extends ChangeNotifier {
     message = '正在查询${table.label}…';
     notifyListeners();
     try {
-      final rows = await _list(table.category.endpoint, body, ticket);
+      final rows = await _list(table.endpoint, body, ticket);
       if (ticket != _generation) throw const _Cancelled();
       busy = false;
       error = false;

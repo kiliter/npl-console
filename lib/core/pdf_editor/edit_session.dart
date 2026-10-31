@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:image/image.dart' as img;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -7,20 +8,144 @@ import 'pdf_engine.dart';
 class SharedPdfImage {
   final Uint8List png;
   final String source;
-  final int page;
+  final bool imported;
+  final bool local;
+  final bool staged;
+  int? targetPage;
+  int page;
   final double aspectRatio;
-  SharedPdfImage(Uint8List bytes, this.source, this.page, this.aspectRatio)
-    : png = Uint8List.fromList(bytes);
+  Rect? bounds;
+  Size? sourceSize;
+  final String? objectId;
+  List<Offset>? basis;
+  SharedPdfImage(
+    Uint8List bytes,
+    this.source,
+    this.page,
+    this.aspectRatio, {
+    this.imported = false,
+    this.staged = false,
+    bool? local,
+    this.targetPage,
+    this.bounds,
+    this.sourceSize,
+    this.objectId,
+    this.basis,
+  }) : local = local ?? imported,
+       png = Uint8List.fromList(bytes);
 }
 
 class EditDocument {
   final String caseNo;
   final Uint8List original;
   Uint8List bytes;
+  late Uint8List repairBase = original;
+  late final List<int> sourcePageOrigins = List.generate(
+    snapshot.pageCount,
+    (page) => page,
+  );
+  final Set<int> mirrorPages = {};
+  final Map<int, Uint8List> _thumbnails = {};
+  final Map<int, Future<Uint8List>> _pendingThumbnails = {};
+  Future<Uint8List> thumbnail(PdfEditEngine engine, int page) {
+    final cached = _thumbnails[page];
+    if (cached != null) return Future.value(cached);
+    return _pendingThumbnails.putIfAbsent(page, () {
+      final revision = bytes;
+      final future = engine.thumbnail(revision, page);
+      future.then<void>(
+        (png) {
+          if (identical(bytes, revision)) {
+            _thumbnails[page] = png;
+            while (_thumbnails.length > 40) {
+              _thumbnails.remove(_thumbnails.keys.first);
+            }
+          }
+          if (identical(_pendingThumbnails[page], future)) {
+            _pendingThumbnails.remove(page);
+          }
+        },
+        onError: (Object _, StackTrace _) {
+          if (identical(_pendingThumbnails[page], future)) {
+            _pendingThumbnails.remove(page);
+          }
+        },
+      );
+      return future;
+    });
+  }
+
   int page = 0;
   PdfPageSnapshot snapshot;
   final List<Uint8List> undo = [], redo = [];
   Uint8List? saved;
+  final _pages = <int, PdfPageSnapshot>{};
+  final _pendingPages = <int, Future<PdfPageSnapshot>>{};
+  Future<void> _renderQueue = Future.value();
+  List<Size> get pageSizes =>
+      snapshot.pageSizes ?? List.filled(snapshot.pageCount, snapshot.size);
+
+  /// 页面预览局部加载，不触发整个会话的 busy 或 notifyListeners。
+  Future<PdfPageSnapshot> preview(
+    PdfEditEngine engine,
+    int index, {
+    bool Function()? isNeeded,
+  }) {
+    if (index == page) return Future.value(snapshot);
+    final cached = _pages.remove(index);
+    if (cached != null) {
+      _pages[index] = cached;
+      return Future.value(cached);
+    }
+    return _pendingPages.putIfAbsent(index, () {
+      final revision = bytes;
+      final task = _renderQueue.then((_) async {
+        if (isNeeded != null && !isNeeded()) {
+          throw const FormatException('页面已离开显示区域');
+        }
+        final result = await engine.inspect(revision, index);
+        if (identical(bytes, revision)) {
+          _pages[index] = result;
+          while (_pages.length > 5 ||
+              (_pages.length > 1 &&
+                  _pages.values.fold<int>(0, (n, p) => n + p.png.length) >
+                      24 * 1024 * 1024)) {
+            _pages.remove(_pages.keys.first);
+          }
+        }
+        return result;
+      });
+      _renderQueue = task.then<void>(
+        (_) {},
+        onError: (Object _, StackTrace _) {},
+      );
+      task.then<void>(
+        (_) {
+          if (identical(_pendingPages[index], task)) {
+            _pendingPages.remove(index);
+          }
+        },
+        onError: (Object _, StackTrace _) {
+          if (identical(_pendingPages[index], task)) {
+            _pendingPages.remove(index);
+          }
+        },
+      );
+      return task;
+    });
+  }
+
+  void releasePreview(int index, Future<PdfPageSnapshot> request) {
+    if (identical(_pendingPages[index], request)) _pendingPages.remove(index);
+  }
+
+  void clearPreviews() {
+    _thumbnails.clear();
+    _pendingThumbnails.clear();
+    _pages.clear();
+    _pendingPages.clear();
+  }
+
   EditDocument(this.caseNo, Uint8List initial, this.snapshot)
     : original = Uint8List.fromList(initial),
       bytes = Uint8List.fromList(initial);
@@ -35,16 +160,20 @@ class EditDocument {
     }
     redo.clear();
     bytes = next;
+    clearPreviews();
   }
 }
 
 /// Shared images are session-only. Closing/discarding an edit never writes OBS.
 class PdfEditSession extends ChangeNotifier {
   final PdfEditEngine engine;
-  EditDocument? source, target;
+  EditDocument? source, target, previewTarget;
+  final Map<int, List<PdfEditObject>> deletedImages = {};
   final List<SharedPdfImage> materials = [];
   bool busy = false;
   String? error;
+  String? syncStatus;
+  bool needsSync = false;
   int _revision = 0;
   bool _disposed = false;
   PdfEditSession({PdfEditEngine? engine}) : engine = engine ?? PdfEditEngine();
@@ -65,10 +194,15 @@ class PdfEditSession extends ChangeNotifier {
           ? null
           : await engine.inspect(sourceBytes, 0);
       if (_disposed || revision != _revision) return;
+      materials.clear();
+      syncStatus = null;
+      needsSync = false;
       target = EditDocument(targetNo, targetBytes, nextTarget);
       source = nextSource == null
           ? null
           : EditDocument(sourceNo!, sourceBytes!, nextSource);
+      previewTarget = EditDocument(targetNo, targetBytes, nextTarget);
+      deletedImages.clear();
     } catch (e) {
       if (!_disposed && revision == _revision) error = _message(e);
     } finally {
@@ -77,6 +211,130 @@ class PdfEditSession extends ChangeNotifier {
         notifyListeners();
       }
     }
+  }
+
+  int targetPage(SharedPdfImage image) =>
+      image.imported ? image.targetPage! : image.page - 1;
+  List<SharedPdfImage> imagesForPage(int page) =>
+      materials.where((m) => targetPage(m) == page).toList();
+  int get unmatchedImages => materials
+      .where((m) => targetPage(m) >= (target?.snapshot.pageCount ?? 0))
+      .length;
+
+  int get parkedImageCount =>
+      materials.where((m) => m.staged && m.targetPage == -1).length;
+
+  void previewChanged() {
+    needsSync = true;
+    syncStatus =
+        '画布预览 · 点击应用后生成单据${unmatchedImages == 0 ? '' : ' · $unmatchedImages 张图片暂无对应页'}';
+    notifyListeners();
+  }
+
+  void deleteTargetImage(int page, PdfEditObject object) {
+    if (busy || target == null) return;
+    final list = deletedImages.putIfAbsent(page, () => []);
+    if (list.any((o) => o.id == object.id)) return;
+    list.add(object);
+    previewChanged();
+  }
+
+  /// 提取成功后才暂存并标记删除，失败不改变原图。
+  Future<void> stashTargetImage(
+    int page, {
+    PdfEditObject? object,
+    SharedPdfImage? material,
+  }) async {
+    final doc = previewTarget, revision = _revision;
+    if (busy || doc == null || (object == null && material == null)) return;
+    await _run(() async {
+      if (page < 0 ||
+          page >= doc.pageSizes.length ||
+          (material != null && !materials.contains(material))) {
+        throw const FormatException('图片已失效');
+      }
+      if (material == null &&
+          (deletedImages[page]?.any((o) => o.id == object!.id) ?? false)) {
+        return;
+      }
+      if (materials.length - (material == null ? 0 : 1) >= 30) {
+        throw const FormatException('共享区最多保留 30 张图片');
+      }
+      final png =
+          material?.png ?? await engine.extractImage(doc.bytes, page, object!);
+      if (_disposed || revision != _revision) return;
+      final used =
+          materials.fold<int>(0, (n, m) => n + m.png.length) -
+          (material?.png.length ?? 0);
+      if (used + png.length > 64 * 1024 * 1024) {
+        throw const FormatException('共享区超过 64 MiB');
+      }
+      final bounds = material?.bounds ?? object!.bounds;
+      final image = SharedPdfImage(
+        png,
+        doc.caseNo,
+        page + 1,
+        bounds.width / bounds.height,
+        imported: true,
+        local: false,
+        staged: true,
+        targetPage: -1,
+        bounds: bounds,
+        sourceSize: material?.sourceSize ?? doc.pageSizes[page],
+        basis: material?.basis ?? object?.basis,
+      );
+      if (material != null) materials.remove(material);
+      materials.add(image);
+      if (object != null) {
+        final deleted = deletedImages.putIfAbsent(page, () => []);
+        if (!deleted.any((o) => o.id == object.id)) deleted.add(object);
+      }
+      previewChanged();
+    });
+  }
+
+  /// 拖放以鼠标落点为中心，保留图片尺寸和旋转，超出页面时等比缩小。
+  void placeStagedImage(SharedPdfImage image, int page, Offset point) {
+    final doc = previewTarget;
+    if (busy ||
+        doc == null ||
+        !image.staged ||
+        !materials.contains(image) ||
+        page < 0 ||
+        page >= doc.pageSizes.length) {
+      return;
+    }
+    final old = image.bounds!,
+        from = image.sourceSize!,
+        to = doc.pageSizes[page];
+    final w = old.width * from.width / to.width,
+        h = old.height * from.height / to.height;
+    final scale = math.min(1.0, math.min(1 / w, 1 / h));
+    final width = w * scale, height = h * scale;
+    final next = Rect.fromLTWH(
+      (point.dx - width / 2).clamp(0.0, 1 - width),
+      (point.dy - height / 2).clamp(0.0, 1 - height),
+      width,
+      height,
+    );
+    image.basis = image.basis
+        ?.map(
+          (p) => Offset(
+            next.left + (p.dx - old.left) / old.width * next.width,
+            next.top + (p.dy - old.top) / old.height * next.height,
+          ),
+        )
+        .toList();
+    image.bounds = next;
+    image.sourceSize = to;
+    image.targetPage = page;
+    previewChanged();
+  }
+
+  void restoreDeletedImages(int page) {
+    if (busy) return;
+    deletedImages.remove(page);
+    previewChanged();
   }
 
   Future<void> navigate(bool old, int page) async {
@@ -109,6 +367,227 @@ class PdfEditSession extends ChangeNotifier {
         throw const FormatException('共享素材超过 64 MiB，请先移除部分素材');
       }
       materials.add(SharedPdfImage(png, doc.caseNo, doc.page + 1, ratio));
+    });
+  }
+
+  Future<void> collectSelected(
+    List<({int page, PdfEditObject object, Size size})> selected,
+  ) async {
+    final doc = source, revision = _revision;
+    if (doc == null || busy || selected.isEmpty) return;
+    await _run(() async {
+      final additions = <SharedPdfImage>[];
+      var used = materials.fold<int>(0, (n, m) => n + m.png.length);
+      for (final item in selected) {
+        if (materials.any(
+          (m) =>
+              m.source == doc.caseNo &&
+              m.page == item.page + 1 &&
+              m.objectId == item.object.id,
+        )) {
+          continue;
+        }
+        if (materials.length + additions.length >= 30) {
+          throw const FormatException('共享区最多保留 30 张图片');
+        }
+        final png = await engine.extractImage(
+          doc.bytes,
+          item.page,
+          item.object,
+        );
+        if (_disposed || revision != _revision) return;
+        used += png.length;
+        if (used > 64 * 1024 * 1024) {
+          throw const FormatException('共享区超过 64 MiB，请减少选图数量');
+        }
+        additions.add(
+          SharedPdfImage(
+            png,
+            doc.caseNo,
+            item.page + 1,
+            item.object.bounds.width / item.object.bounds.height,
+            bounds: item.object.bounds,
+            sourceSize: item.size,
+            objectId: item.object.id,
+            basis: item.object.basis,
+          ),
+        );
+      }
+      materials.addAll(additions);
+      if (additions.isNotEmpty) {
+        needsSync = true;
+        syncStatus = null;
+      }
+    });
+    if (error == null && !_disposed && revision == _revision && needsSync) {
+      previewChanged();
+    }
+  }
+
+  Future<void> synchronize() async {
+    final doc = target, revision = _revision;
+    if (doc == null || busy || (materials.isEmpty && !needsSync)) return;
+    await _run(() async {
+      if (materials.any((m) => m.bounds == null || m.sourceSize == null)) {
+        throw const FormatException('图片缺少原页码或坐标，请从旧单据重新选择');
+      }
+      final next = await engine.synchronizeImages(doc.repairBase, [
+        for (final material in materials)
+          if (targetPage(material) >= 0 &&
+              targetPage(material) < doc.snapshot.pageCount)
+            PdfImagePlacement(
+              material.png,
+              targetPage(material),
+              material.bounds!,
+              material.sourceSize!,
+              basis: material.basis,
+            ),
+      ], removed: deletedImages);
+      final snapshot = await engine.inspect(next, 0);
+      if (_disposed || revision != _revision) return;
+      doc.commit(next);
+      doc.page = 0;
+      doc.snapshot = snapshot;
+      needsSync = false;
+      syncStatus =
+          '已应用，可保存到本地${parkedImageCount == 0 ? '' : '；$parkedImageCount 张暂存图片尚未放置'}${unmatchedImages == 0 ? '' : '；$unmatchedImages 张图片无对应页，未写入'}';
+    });
+  }
+
+  /// 左侧镜像只增加当前会话的来源页，右侧 PDF 及图片同步选择保持原意。
+  Future<void> mirrorSourcePage({
+    required int page,
+    required int insertAt,
+  }) async {
+    final doc = source, destination = target, revision = _revision;
+    if (doc == null || destination == null || busy) return;
+    await _run(() async {
+      if (page < 0 ||
+          page >= doc.snapshot.pageCount ||
+          insertAt < 0 ||
+          insertAt > doc.snapshot.pageCount) {
+        throw const FormatException('镜像来源或插入位置超出范围');
+      }
+      final origins = List<int>.of(doc.sourcePageOrigins);
+      final next = await engine.copyPage(doc.bytes, doc.bytes, page, insertAt);
+      final snapshot = await engine.inspect(next, 0);
+      if (_disposed || revision != _revision) return;
+      final mirrors =
+          doc.mirrorPages.map((old) => old >= insertAt ? old + 1 : old).toSet()
+            ..add(insertAt);
+      doc.sourcePageOrigins
+        ..clear()
+        ..addAll(origins..insert(insertAt, origins[page]));
+      doc.mirrorPages
+        ..clear()
+        ..addAll(mirrors);
+      for (final material in materials.where((m) => !m.imported)) {
+        if (material.page - 1 >= insertAt) material.page++;
+      }
+      doc.commit(next);
+      doc.page = 0;
+      doc.snapshot = snapshot;
+      previewChanged();
+    });
+  }
+
+  Future<void> copyPageToTarget({
+    required bool fromOld,
+    required int page,
+    required int insertAt,
+  }) async {
+    final doc = target, from = fromOld ? source : target, revision = _revision;
+    if (doc == null || from == null || busy) return;
+    final copies = fromOld ? <SharedPdfImage>[] : imagesForPage(page);
+    final copiedDeletes = fromOld
+        ? <PdfEditObject>[]
+        : List<PdfEditObject>.of(deletedImages[page] ?? []);
+    await _run(() async {
+      if (materials.length + copies.length > 30 ||
+          [...materials, ...copies].fold<int>(0, (n, m) => n + m.png.length) >
+              64 * 1024 * 1024) {
+        throw const FormatException('复制后的共享图片超过容量，请先减少共享图片');
+      }
+      final next = await engine.copyPage(
+        doc.repairBase,
+        fromOld ? from.bytes : doc.repairBase,
+        page,
+        insertAt,
+      );
+      final snapshot = await engine.inspect(next, 0);
+      if (_disposed || revision != _revision) return;
+      doc.repairBase = next;
+      final shifted = {
+        for (final entry in deletedImages.entries)
+          (entry.key >= insertAt ? entry.key + 1 : entry.key): entry.value,
+      };
+      deletedImages
+        ..clear()
+        ..addAll(shifted);
+      if (copiedDeletes.isNotEmpty) deletedImages[insertAt] = copiedDeletes;
+      for (final material in materials.where((m) => m.imported)) {
+        if (material.targetPage! >= insertAt) {
+          material.targetPage = material.targetPage! + 1;
+        }
+      }
+      for (final m in copies) {
+        materials.add(
+          SharedPdfImage(
+            m.png,
+            m.source,
+            insertAt + 1,
+            m.aspectRatio,
+            imported: true,
+            local: m.local,
+            staged: m.staged,
+            targetPage: insertAt,
+            bounds: m.bounds,
+            sourceSize: m.sourceSize,
+            basis: m.basis,
+          ),
+        );
+      }
+      doc.commit(next);
+      doc.page = 0;
+      doc.snapshot = snapshot;
+      previewTarget = EditDocument(doc.caseNo, next, snapshot);
+      previewChanged();
+    });
+  }
+
+  Future<void> importLocalImage(
+    Uint8List bytes,
+    String name,
+    int page,
+    Rect bounds,
+  ) async {
+    final doc = target, revision = _revision;
+    if (doc == null || busy) return;
+    await _run(() async {
+      if (page < 0 || page >= doc.pageSizes.length) {
+        throw const FormatException('目标页码超出范围');
+      }
+      if (materials.length >= 30 || bytes.length > 20 * 1024 * 1024) {
+        throw const FormatException('共享区最多 30 张，单张图片不得超过 20 MiB');
+      }
+      final decoded = await compute(normalizeImportedImage, bytes);
+      if (_disposed || revision != _revision) return;
+      if (materials.fold<int>(decoded.png.length, (n, m) => n + m.png.length) >
+          64 * 1024 * 1024) {
+        throw const FormatException('共享区超过 64 MiB');
+      }
+      final material = SharedPdfImage(
+        decoded.png,
+        name,
+        page + 1,
+        decoded.ratio,
+        imported: true,
+        targetPage: page,
+        bounds: bounds,
+        sourceSize: doc.pageSizes[page],
+      );
+      materials.add(material);
+      previewChanged();
     });
   }
 
@@ -226,21 +705,25 @@ class PdfEditSession extends ChangeNotifier {
     notifyListeners();
   }
 
-  void removeMaterial(SharedPdfImage image) {
+  Future<void> removeMaterial(SharedPdfImage image) async {
+    if (busy) return;
     materials.remove(image);
-    notifyListeners();
+    previewChanged();
   }
 
   void clearMaterials() {
     materials.clear();
-    notifyListeners();
+    previewChanged();
   }
 
   void reset() {
     _revision++;
     busy = false;
-    source = target = null;
+    source = target = previewTarget = null;
+    deletedImages.clear();
     materials.clear();
+    needsSync = false;
+    syncStatus = null;
     error = null;
     notifyListeners();
   }
@@ -270,7 +753,26 @@ class PdfEditSession extends ChangeNotifier {
     _disposed = true;
     _revision++;
     materials.clear();
-    source = target = null;
+    source = target = previewTarget = null;
+    deletedImages.clear();
     super.dispose();
   }
+}
+
+({Uint8List png, double ratio}) normalizeImportedImage(Uint8List bytes) {
+  final decoder = img.findDecoderForData(bytes);
+  final info = decoder?.startDecode(bytes);
+  if (info == null ||
+      info.width <= 0 ||
+      info.height <= 0 ||
+      info.width * info.height > 40000000) {
+    throw const FormatException('图片无法读取或超过 4000 万像素');
+  }
+  final frame = decoder!.decodeFrame(0);
+  if (frame == null) throw const FormatException('图片解码失败');
+  final image = img.bakeOrientation(frame);
+  return (
+    png: Uint8List.fromList(img.encodePng(image)),
+    ratio: image.width / image.height,
+  );
 }

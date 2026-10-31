@@ -3,11 +3,19 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui';
 import 'package:ffi/ffi.dart';
+import 'package:flutter/foundation.dart' show compute;
 import 'package:image/image.dart' as img;
 import 'package:pdfrx/pdfrx.dart';
 import 'package:pdfium_dart/pdfium_dart.dart' as native;
 
 enum PdfObjectKind { text, image }
+
+/// 预览、暂存、删除和导出使用同一归一化坐标容差。
+bool sameImageBounds(Rect a, Rect b) =>
+    (a.left - b.left).abs() < .0001 &&
+    (a.top - b.top).abs() < .0001 &&
+    (a.right - b.right).abs() < .0001 &&
+    (a.bottom - b.bottom).abs() < .0001;
 
 /// Object paths are indices within one immutable PDF revision, never native handles.
 class PdfEditObject {
@@ -17,12 +25,14 @@ class PdfEditObject {
   bounds; // Normalized displayed page coordinates, including rotation/crop.
   final String text;
   final double fontSize;
+  final List<Offset>? basis;
   const PdfEditObject(
     this.path,
     this.kind,
     this.bounds, {
     this.text = '',
     this.fontSize = 12,
+    this.basis,
   });
   String get id => path.join('.');
   bool get nested => path.length > 1;
@@ -33,7 +43,30 @@ class PdfPageSnapshot {
   final Size size;
   final List<PdfEditObject> objects;
   final int pageCount;
-  const PdfPageSnapshot(this.png, this.size, this.objects, this.pageCount);
+  final List<Size>? pageSizes;
+  const PdfPageSnapshot(
+    this.png,
+    this.size,
+    this.objects,
+    this.pageCount, {
+    this.pageSizes,
+  });
+}
+
+/// 一张来源图片在目标单据中的页码和位置（页面左上角为原点）。
+class PdfImagePlacement {
+  final Uint8List png;
+  final int page;
+  final Rect bounds;
+  final Size sourceSize;
+  final List<Offset>? basis;
+  const PdfImagePlacement(
+    this.png,
+    this.page,
+    this.bounds,
+    this.sourceSize, {
+    this.basis,
+  });
 }
 
 /// PDFium calls run in pdfrx's worker isolate (including font callbacks). Every write uses a fresh
@@ -83,10 +116,17 @@ class PdfEditEngine {
       if (image == null) throw const FormatException('无法渲染 PDF');
       try {
         return PdfPageSnapshot(
-          _png(image.pixels, image.width, image.height, image.width * 4, 4),
+          await compute(_encodePreview, (
+            pixels: image.pixels,
+            width: image.width,
+            height: image.height,
+          )),
           Size(p.width, p.height),
           objects,
           doc.pages.length,
+          pageSizes: [
+            for (final page in doc.pages) Size(page.width, page.height),
+          ],
         );
       } finally {
         image.dispose();
@@ -191,6 +231,21 @@ class PdfEditEngine {
                   display,
                   text: text,
                   fontSize: fontSize,
+                  basis: type == 3
+                      ? [
+                              const Offset(0, 0),
+                              const Offset(1, 0),
+                              const Offset(0, 1),
+                            ]
+                            .map(
+                              (point) => _toDisplay(
+                                a,
+                                page,
+                                (transform * _matrix(a, object)).apply(point),
+                              ),
+                            )
+                            .toList()
+                      : null,
                 ),
               );
             } finally {
@@ -427,6 +482,189 @@ class PdfEditEngine {
     });
   }
 
+  /// 整批修复只打开、序列化一次 PDF；任一页失败均不返回部分结果。
+  Future<Uint8List> synchronizeImages(
+    Uint8List bytes,
+    List<PdfImagePlacement> images, {
+    Map<int, List<PdfEditObject>> removed = const {},
+  }) => _native(bytes, (a, pdf) {
+    if ((a.FPDF_GetDocPermissions(pdf) & 8) == 0) {
+      throw const FormatException('此 PDF 不允许修改');
+    }
+    final count = a.FPDF_GetPageCount(pdf);
+    for (final image in images) {
+      if (image.page < 0 || image.page >= count) {
+        throw FormatException('新单据没有第 ${image.page + 1} 页，无法同步；请核对新老单据');
+      }
+    }
+    final pages = {...images.map((image) => image.page), ...removed.keys};
+    for (final index in pages) {
+      final page = a.FPDF_LoadPage(pdf, index);
+      if (page == ffi.nullptr) throw const FormatException('无法读取目标页面');
+      try {
+        _removeImages(a, page, removed[index] ?? []);
+        final width = a.FPDF_GetPageWidthF(page),
+            height = a.FPDF_GetPageHeightF(page);
+        final originals =
+            <(native.FPDF_PAGEOBJECT, native.FPDF_PAGEOBJECT?, Rect)>[];
+        void collectOriginals(
+          native.FPDF_PAGEOBJECT? parent,
+          _Matrix transform,
+        ) {
+          final count = parent == null
+              ? a.FPDFPage_CountObjects(page)
+              : a.FPDFFormObj_CountObjects(parent);
+          for (var i = 0; i < count; i++) {
+            final object = parent == null
+                ? a.FPDFPage_GetObject(page, i)
+                : a.FPDFFormObj_GetObject(parent, i);
+            final type = a.FPDFPageObj_GetType(object);
+            if (type == 5) {
+              collectOriginals(object, transform * _matrix(a, object));
+            } else if (type == 3) {
+              final matrix = transform * _matrix(a, object);
+              final bounds = _box(
+                [
+                  const Offset(0, 0),
+                  const Offset(1, 0),
+                  const Offset(0, 1),
+                  const Offset(1, 1),
+                ].map(matrix.apply).map((p) => _toDisplay(a, page, p)).toList(),
+              );
+              originals.add((object, parent, bounds));
+            }
+          }
+        }
+
+        collectOriginals(null, const _Matrix());
+        for (final image in images.where((image) => image.page == index)) {
+          // 保留原图相对于可见页左上角的实际尺寸和坐标，不随纸张尺寸拉伸。
+          final r = Rect.fromLTWH(
+            image.bounds.left * image.sourceSize.width / width,
+            image.bounds.top * image.sourceSize.height / height,
+            image.bounds.width * image.sourceSize.width / width,
+            image.bounds.height * image.sourceSize.height / height,
+          );
+          _validateBounds(r);
+          final basis = image.basis;
+          final _Matrix placement;
+          if (basis != null && basis.length == 3) {
+            final points = basis
+                .map(
+                  (point) => _fromDisplay(
+                    a,
+                    page,
+                    Offset(
+                      point.dx * image.sourceSize.width / width,
+                      point.dy * image.sourceSize.height / height,
+                    ),
+                  ),
+                )
+                .toList();
+            final origin = points[0],
+                x = points[1] - origin,
+                y = points[2] - origin;
+            placement = _Matrix(x.dx, x.dy, y.dx, y.dy, origin.dx, origin.dy);
+          } else {
+            placement = _displayMatrix(a, page, r);
+          }
+          // 仅删除底稿中匹配的图片，再将图层按共享区顺序追加到最上方。
+          // 不能重新搜索刚插入的图层，否则同坐标透明图会互相覆盖。
+          for (final original in originals.toList()) {
+            if (!sameImageBounds(original.$3, r)) continue;
+            final removed = original.$2 == null
+                ? a.FPDFPage_RemoveObject(page, original.$1)
+                : a.FPDFFormObj_RemoveObject(original.$2!, original.$1);
+            if (removed == 0) throw const FormatException('图片替换失败');
+            a.FPDFPageObj_Destroy(original.$1);
+            originals.remove(original);
+          }
+          final object = a.FPDFPageObj_NewImageObj(pdf);
+          try {
+            _setImage(a, object, image.png);
+            _setMatrix(a, object, placement);
+            if (a.FPDFPage_InsertObject(page, object) == 0) {
+              throw const FormatException('图片同步失败');
+            }
+          } catch (_) {
+            a.FPDFPageObj_Destroy(object);
+            rethrow;
+          }
+        }
+        if (a.FPDFPage_GenerateContent(page) == 0) {
+          throw const FormatException('图片同步写入失败');
+        }
+      } finally {
+        a.FPDF_ClosePage(page);
+      }
+    }
+    return _saveNative(a, pdf);
+  });
+
+  /// 只渲染受影响的一页背景，不生成或保存 PDF。用于画布遮掉已删除/被替换的图层。
+  Future<Uint8List> previewBackground(
+    Uint8List bytes,
+    int index,
+    List<PdfEditObject> hidden,
+  ) => _native(bytes, (a, pdf) {
+    final page = a.FPDF_LoadPage(pdf, index);
+    if (page == ffi.nullptr) throw const FormatException('无法读取预览页');
+    try {
+      _removeImages(a, page, hidden);
+      final pw = a.FPDF_GetPageWidthF(page), ph = a.FPDF_GetPageHeightF(page);
+      final scale = math.min(1500 / pw, 1500 / ph);
+      final w = (pw * scale).ceil(), h = (ph * scale).ceil();
+      final bitmap = a.FPDFBitmap_Create(w, h, 1);
+      if (bitmap == ffi.nullptr) throw const FormatException('预览内存不足');
+      try {
+        a.FPDFBitmap_FillRect(bitmap, 0, 0, w, h, 0xffffffff);
+        a.FPDF_RenderPageBitmap(bitmap, page, 0, 0, w, h, 0, 1);
+        final stride = a.FPDFBitmap_GetStride(bitmap);
+        return _png(
+          a.FPDFBitmap_GetBuffer(
+            bitmap,
+          ).cast<ffi.Uint8>().asTypedList(stride * h),
+          w,
+          h,
+          stride,
+          a.FPDFBitmap_GetFormat(bitmap),
+        );
+      } finally {
+        a.FPDFBitmap_Destroy(bitmap);
+      }
+    } finally {
+      a.FPDF_ClosePage(page);
+    }
+  });
+
+  static void _removeImages(
+    native.PDFium a,
+    native.FPDF_PAGE page,
+    List<PdfEditObject> objects,
+  ) {
+    // 先解析不可变版本中的路径，移除对象后索引会改变。
+    final resolved = [
+      for (final object in objects)
+        (
+          object,
+          _find(a, page, object.path),
+          object.nested
+              ? _find(a, page, object.path.sublist(0, object.path.length - 1))
+              : null,
+        ),
+    ];
+    for (final entry in resolved) {
+      if (entry.$1.kind != PdfObjectKind.image) {
+        throw const FormatException('只能删除图片');
+      }
+      final removed = entry.$3 == null
+          ? a.FPDFPage_RemoveObject(page, entry.$2)
+          : a.FPDFFormObj_RemoveObject(entry.$3!, entry.$2);
+      if (removed == 0) throw const FormatException('图片删除失败');
+      a.FPDFPageObj_Destroy(entry.$2);
+    }
+  }
+
   Future<Uint8List> replaceImage(
     Uint8List bytes,
     int page,
@@ -488,6 +726,66 @@ class PdfEditEngine {
       a.FPDFPageObj_Destroy(target);
     });
   }
+
+  /// 从任意来源 PDF 复制完整页面，插入位置使用从零开始的页间索引。
+  Future<Uint8List> copyPage(
+    Uint8List target,
+    Uint8List source,
+    int index,
+    int insertAt,
+  ) => _native(target, (a, pdf) {
+    if ((a.FPDF_GetDocPermissions(pdf) & 1024) == 0) {
+      throw const FormatException('新单据不允许插入页面');
+    }
+    if (insertAt < 0 || insertAt > a.FPDF_GetPageCount(pdf)) {
+      throw const FormatException('插入位置超出范围');
+    }
+    final data = calloc<ffi.Uint8>(source.length)
+      ..asTypedList(source.length).setAll(0, source);
+    final from = a.FPDF_LoadMemDocument64(
+      data.cast(),
+      source.length,
+      ffi.nullptr,
+    );
+    final range = (index + 1).toString().toNativeUtf8();
+    try {
+      if (from == ffi.nullptr ||
+          index < 0 ||
+          index >= a.FPDF_GetPageCount(from)) {
+        throw const FormatException('来源页码超出范围');
+      }
+      if ((a.FPDF_GetDocPermissions(from) & 16) == 0) {
+        throw const FormatException('来源单据不允许复制');
+      }
+      if (a.FPDF_ImportPages(pdf, from, range.cast(), insertAt) == 0) {
+        throw const FormatException('页面复制失败');
+      }
+      return _saveNative(a, pdf);
+    } finally {
+      if (from != ffi.nullptr) a.FPDF_CloseDocument(from);
+      calloc.free(data);
+      calloc.free(range);
+    }
+  });
+
+  Future<Uint8List> thumbnail(Uint8List bytes, int index) =>
+      _open(bytes, (doc) async {
+        final page = doc.pages[index];
+        final image = await page.render(
+          fullWidth: 100,
+          fullHeight: 100 * page.height / page.width,
+        );
+        if (image == null) throw const FormatException('缩略图加载失败');
+        try {
+          return await compute(_encodePreview, (
+            pixels: image.pixels,
+            width: image.width,
+            height: image.height,
+          ));
+        } finally {
+          image.dispose();
+        }
+      });
 
   Future<Uint8List> duplicatePage(Uint8List bytes, int index) =>
       _native(bytes, (a, pdf) {
@@ -795,3 +1093,6 @@ Uint8List _saveNative(native.PDFium a, native.FPDF_DOCUMENT pdf) {
     callback.close();
   }
 }
+
+Uint8List _encodePreview(({Uint8List pixels, int width, int height}) data) =>
+    PdfEditEngine._png(data.pixels, data.width, data.height, data.width * 4, 4);

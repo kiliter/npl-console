@@ -1,5 +1,6 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'jwt_signer.dart';
+import 'local_config.dart';
 
 /// 固定服务和条目标识，覆盖安装继续读取同一项；只保存签名所需参数，不保存导入密码。
 class KeyVault {
@@ -23,21 +24,44 @@ class KeyVault {
     ),
   });
 
-  /// 读取失败保留原条目，交由界面提示，不自动删除或退回明文存储。
-  Future<JwtSigner?> read() async {
-    final value = await storage.read(key: entry);
-    return value == null ? null : JwtSigner.fromSecureRecord(value);
-  }
+  static const fileName = 'signing-key.json';
+  static const migrationFile = 'keychain-migrated-v1';
+  final LocalConfig files = const LocalConfig();
 
-  /// 写入后读回核对，避免系统拒绝访问时界面误报保存成功。
-  Future<void> write(JwtSigner signer) async {
-    final value = signer.toSecureRecord();
-    await storage.write(key: entry, value: value);
-    if (await storage.read(key: entry) != value) {
-      throw const FormatException('系统安全存储未确认密钥写入，请检查钥匙串访问权限');
+  Future<JwtSigner?> read() => LocalConfig.serialized(() async {
+    final current = await files.readFile(fileName);
+    final migrated = await files.readFile(migrationFile);
+    if (current != null) {
+      final signer = JwtSigner.fromSecureRecord(current);
+      if (migrated == null) await _retireLegacy();
+      return signer;
     }
+    if (migrated != null) return null;
+    final previous = await storage.read(key: entry);
+    if (previous == null) {
+      await files.writeFile(migrationFile, '1');
+      return null;
+    }
+    final signer = JwtSigner.fromSecureRecord(previous);
+    await files.writeFile(fileName, signer.toSecureRecord());
+    // 文件持久化并读回校验完成后，才允许删除旧钥匙串副本。
+    await _retireLegacy();
+    return signer;
+  });
+
+  Future<void> _retireLegacy() async {
+    await storage.delete(key: entry);
+    if (await storage.containsKey(key: entry)) throw const FormatException('旧密钥副本未完成清理，请重试迁移');
+    await files.writeFile(migrationFile, '1');
   }
 
-  /// 仅删除本应用的签名条目，不影响其它钥匙串内容或原始 keystore 文件。
-  Future<void> delete() => storage.delete(key: entry);
+  Future<void> write(JwtSigner signer) => LocalConfig.serialized(() async {
+    await files.writeFile(fileName, signer.toSecureRecord());
+    if (await files.readFile(migrationFile) == null) await _retireLegacy();
+  });
+
+  Future<void> delete() => LocalConfig.serialized(() async {
+    if (await files.readFile(migrationFile) == null) await _retireLegacy();
+    await files.deleteFile(fileName);
+  });
 }

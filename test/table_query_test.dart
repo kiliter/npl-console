@@ -64,7 +64,7 @@ void main() {
         opMonth: '2026-10',
       );
       await c.queryTable(table, body);
-      expect(sent!.url.path, '/npl${table.category.endpoint}');
+      expect(sent!.url.path, '/npl${table.endpoint}');
       expect(jsonDecode(sent!.body), {
         table == TableKind.wopicinfo ? 'picSeq' : 'sysAccept':
             '000202610310000000000000003',
@@ -90,7 +90,9 @@ void main() {
         home: Scaffold(body: TableQuerySheet(controller: c)),
       ),
     );
-    await tester.tap(find.text('图片表'));
+    await tester.tap(find.byType(DropdownButtonFormField<TableKind>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('图片表（WO_PIC_INFO）').last);
     await tester.pumpAndSettle();
     expect(find.text('受理流水'), findsOneWidget);
     expect(find.text('图片序号'), findsNothing);
@@ -110,11 +112,12 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     c.dispose();
   });
-  test('四张表分别映射到既有 queryList 接口', () {
-    expect(TableKind.woinfo.category.endpoint, '/api/wo/queryList');
-    expect(TableKind.wobizinfo.category.endpoint, '/api/wobiz/queryList');
-    expect(TableKind.wosigninfo.category.endpoint, '/api/wosign/queryList');
-    expect(TableKind.wopicinfo.category.endpoint, '/api/wopic/queryList');
+  test('五张表分别映射到既有 queryList 接口', () {
+    expect(TableKind.woinfo.endpoint, '/api/wo/queryList');
+    expect(TableKind.wobizinfo.endpoint, '/api/wobiz/queryList');
+    expect(TableKind.wosigninfo.endpoint, '/api/wosign/queryList');
+    expect(TableKind.wopicinfo.endpoint, '/api/wopic/queryList');
+    expect(TableKind.interResult.endpoint, '/api/inter/result/queryList');
     expect(TableKind.wopicinfo.hasPicSeq, isTrue);
     expect(TableKind.woinfo.hasPicSeq, isFalse);
   });

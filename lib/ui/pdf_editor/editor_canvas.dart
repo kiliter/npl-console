@@ -1,74 +1,149 @@
-import 'dart:math' as math;
+import 'repair_connections.dart';
+import 'repair_preview.dart';
 import 'package:flutter/material.dart';
-import '../../core/pdf_editor/pdf_engine.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
+import 'package:flutter/services.dart';
 import '../../core/pdf_editor/edit_session.dart';
+import '../../core/pdf_editor/pdf_engine.dart';
 
-/// Fit-to-width paper with object hit testing. The raster is a preview only;
-/// edits are applied to native PDF objects, never to this rendered image.
+typedef RepairScrollPosition = ({bool source, int page, double fraction});
+
+typedef RepairSelection = ({int page, PdfEditObject object, Size size});
+
+/// 连续滚动按需渲染。页面状态归页面所有，滚动与加载均不通知编辑会话。
 class EditorCanvas extends StatefulWidget {
   final EditDocument document;
-  final bool source, enabled, textTool;
-  final PdfEditObject? selected;
-  final ValueChanged<PdfEditObject?> onSelect;
-  final void Function(SharedPdfImage, Offset)? onPlace;
-  final void Function(PdfEditObject, Rect)? onMove;
-  final SharedPdfImage? pending;
-  final Widget? selectionToolbar;
+  final PdfEditEngine engine;
+  final bool source, enabled;
+  final ValueNotifier<Map<String, RepairSelection>> selection;
+  final ValueChanged<int>? onCopyPage;
+  final ValueNotifier<RepairScrollPosition?>? scrollLink;
+  final PdfEditSession? session;
+  final RepairConnections? connections;
+  final ValueChanged<int>? onMirrorPage;
   const EditorCanvas({
     super.key,
     required this.document,
+    required this.engine,
     required this.source,
     required this.enabled,
-    required this.onSelect,
-    this.selected,
-    this.onPlace,
-    this.onMove,
-    this.pending,
-    this.selectionToolbar,
-    this.textTool = false,
+    required this.selection,
+    this.onCopyPage,
+    this.scrollLink,
+    this.session,
+    this.connections,
+    this.onMirrorPage,
   });
   @override
   State<EditorCanvas> createState() => _EditorCanvasState();
 }
 
 class _EditorCanvasState extends State<EditorCanvas> {
-  final paperKey = GlobalKey();
-  Rect? preview;
-  Rect? gestureStart;
-  Offset gestureDelta = Offset.zero;
-  double zoom = 1;
-  Offset point(Offset global) {
-    final box = paperKey.currentContext!.findRenderObject()! as RenderBox;
-    final local = box.globalToLocal(global);
-    return Offset(
-      (local.dx / box.size.width).clamp(0, 1),
-      (local.dy / box.size.height).clamp(0, 1),
-    );
+  final scroll = ScrollController();
+  final progress = ValueNotifier<(int, double)>((0, 0));
+  List<double> offsets = [];
+  List<double> pageHeights = [];
+  bool following = false;
+  @override
+  void initState() {
+    super.initState();
+    widget.connections?.viewports[widget.source] = context;
+    scroll.addListener(updateProgress);
+    widget.scrollLink?.addListener(followOther);
   }
 
-  void select(Offset at) {
+  Future<void> pageMenu(int page, Offset at) async {
     if (!widget.enabled) return;
-    if (!widget.source && widget.pending != null) {
-      widget.onPlace?.call(widget.pending!, at);
+    final overlay =
+        Overlay.of(context).context.findRenderObject()! as RenderBox;
+    final choice = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(
+        Rect.fromLTWH(at.dx, at.dy, 1, 1),
+        Offset.zero & overlay.size,
+      ),
+      items: [
+        PopupMenuItem(
+          enabled: false,
+          child: Text('${widget.source ? '旧' : '新'}单据 · 第 ${page + 1} 页'),
+        ),
+        if (widget.source && widget.onMirrorPage != null)
+          const PopupMenuItem(value: 'mirror', child: Text('在左侧复制为镜像页…')),
+        if (widget.onCopyPage != null)
+          PopupMenuItem(
+            value: 'copy',
+            child: Text(widget.source ? '复制此页到右侧…' : '复制本页…'),
+          ),
+      ],
+    );
+    if (!mounted || !widget.enabled) return;
+    if (choice == 'mirror') widget.onMirrorPage?.call(page);
+    if (choice == 'copy') widget.onCopyPage?.call(page);
+  }
+
+  String pageLabel(int page) {
+    final prefix = widget.source && widget.document.mirrorPages.contains(page)
+        ? '镜像 · 原第 ${widget.document.sourcePageOrigins[page] + 1} 页 · '
+        : '';
+    return prefix.isEmpty ? (widget.source ? '旧单据' : '实时预览') : prefix;
+  }
+
+  void followOther() {
+    final position = widget.scrollLink?.value;
+    if (position == null ||
+        position.source == widget.source ||
+        !scroll.hasClients) {
       return;
     }
-    final objects = widget.document.snapshot.objects.reversed.where(
-      (o) =>
-          (widget.source
-              ? o.kind == PdfObjectKind.image
-              : !widget.textTool || o.kind == PdfObjectKind.text) &&
-          o.bounds.inflate(.006).contains(at),
-    );
-    widget.onSelect(objects.isEmpty ? null : objects.first);
+    if (offsets.isEmpty) return;
+    final target = position.page.clamp(0, offsets.length - 1);
+    following = true;
+    try {
+      scroll.jumpTo(
+        (offsets[target] + position.fraction * pageHeights[target]).clamp(
+          0,
+          scroll.position.maxScrollExtent,
+        ),
+      );
+    } finally {
+      following = false;
+    }
+  }
+
+  void updateProgress() {
+    if (!scroll.hasClients || offsets.isEmpty) return;
+    widget.connections?.refresh();
+    final at = scroll.offset;
+    var page = 0;
+    for (var i = 1; i < offsets.length; i++) {
+      if (offsets[i] > at + 24) break;
+      page = i;
+    }
+    final total = scroll.position.maxScrollExtent;
+    progress.value = (page, total <= 0 ? 1 : (at / total).clamp(0, 1));
+    if (!following && widget.scrollLink != null && page < pageHeights.length) {
+      widget.scrollLink!.value = (
+        source: widget.source,
+        page: page,
+        fraction: ((at - offsets[page]) / pageHeights[page]).clamp(0, 1),
+      );
+    }
+  }
+
+  void jump(int page) {
+    if (!scroll.hasClients || page >= offsets.length) return;
+    scroll.jumpTo(offsets[page].clamp(0, scroll.position.maxScrollExtent));
   }
 
   @override
-  void didUpdateWidget(covariant EditorCanvas oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.document.snapshot != widget.document.snapshot ||
-        oldWidget.selected != widget.selected) {
-      preview = null;
+  void dispose() {
+    if (identical(widget.connections?.viewports[widget.source], context)) {
+      widget.connections?.viewports.remove(widget.source);
     }
+    widget.scrollLink?.removeListener(followOther);
+    scroll.dispose();
+    progress.dispose();
+    super.dispose();
   }
 
   @override
@@ -76,70 +151,135 @@ class _EditorCanvasState extends State<EditorCanvas> {
     color: const Color(0xffe9eef5),
     child: LayoutBuilder(
       builder: (context, constraints) {
-        final mobile = constraints.maxWidth < 600;
-        final width = math.max(
-          160.0,
-          constraints.maxWidth - (mobile ? 16 : 32),
-        );
-        final size = widget.document.snapshot.size;
+        final width = (constraints.maxWidth - 24).clamp(1.0, double.infinity);
+        final sizes = widget.document.pageSizes;
+        final heights = [
+          for (final size in sizes) width * size.height / size.width + 44,
+        ];
+        pageHeights = heights;
+        var offset = 0.0;
+        offsets = [
+          for (final height in heights)
+            (() {
+              final start = offset;
+              offset += height;
+              return start;
+            })(),
+        ];
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            following = true;
+            updateProgress();
+            following = false;
+          }
+        });
         return Column(
           children: [
             Expanded(
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: SizedBox(
-                  width: width * zoom + (mobile ? 16 : 32),
-                  child: SingleChildScrollView(
-                    padding: EdgeInsets.all(mobile ? 8 : 16),
-                    child: DragTarget<SharedPdfImage>(
-                      onWillAcceptWithDetails: (_) =>
-                          widget.enabled && !widget.source,
-                      onAcceptWithDetails: (details) => widget.onPlace?.call(
-                        details.data,
-                        point(details.offset),
-                      ),
-                      builder: (context, candidates, rejected) => SizedBox(
-                        key: paperKey,
-                        width: width * zoom,
-                        height: width * zoom * size.height / size.width,
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTapUp: (details) =>
-                              select(point(details.globalPosition)),
-                          child: Stack(
-                            clipBehavior: Clip.none,
-                            children: [
-                              Positioned.fill(
-                                child: Image.memory(
-                                  widget.document.snapshot.png,
-                                  fit: BoxFit.fill,
-                                  gaplessPlayback: true,
-                                  filterQuality: FilterQuality.high,
+              child: Scrollbar(
+                controller: scroll,
+                thumbVisibility: true,
+                interactive: true,
+                child: ListView.builder(
+                  key: PageStorageKey(
+                    '${widget.source ? '旧' : '新'}-${widget.document.caseNo}',
+                  ),
+                  controller: scroll,
+                  padding: const EdgeInsets.all(12),
+                  scrollCacheExtent: const ScrollCacheExtent.pixels(300),
+                  itemCount: sizes.length,
+                  itemExtentBuilder: (index, dimensions) => heights[index],
+                  itemBuilder: (context, index) => GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onSecondaryTapUp: (details) =>
+                        pageMenu(index, details.globalPosition),
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 16),
+                      child: Column(
+                        children: [
+                          SizedBox(
+                            height: 28,
+                            child: Center(
+                              child: Text(
+                                '第 ${index + 1} / ${sizes.length} 页 · ${pageLabel(index)}',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Color(0xff52647c),
                                 ),
                               ),
-                              if (candidates.isNotEmpty)
-                                Positioned.fill(
-                                  child: IgnorePointer(
-                                    child: Container(
-                                      decoration: BoxDecoration(
-                                        color: Colors.blue.withValues(
-                                          alpha: .08,
-                                        ),
-                                        border: Border.all(
-                                          color: Colors.blue,
-                                          width: 2,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              if (widget.selected != null)
-                                ...selection(
-                                  width * zoom,
-                                  width * zoom * size.height / size.width,
-                                ),
-                            ],
+                            ),
                           ),
+                          SizedBox(
+                            width: width,
+                            height:
+                                width *
+                                sizes[index].height /
+                                sizes[index].width,
+                            child: RepaintBoundary(
+                              child: RepairPageGeometry(
+                                pageSize: sizes[index],
+                                child: _RepairPage(
+                                  key: ValueKey((widget.document.bytes, index)),
+                                  document: widget.document,
+                                  engine: widget.engine,
+                                  page: index,
+                                  source: widget.source,
+                                  enabled: widget.enabled,
+                                  selection: widget.selection,
+                                  session: widget.session,
+                                  connections: widget.connections,
+                                  onCopyPage: widget.onCopyPage,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            SizedBox(
+              height: 58,
+              child: ValueListenableBuilder<(int, double)>(
+                valueListenable: progress,
+                builder: (context, position, _) => ListView.builder(
+                  key: ValueKey(
+                    widget.source ? 'source-thumbnails' : 'target-thumbnails',
+                  ),
+                  scrollDirection: Axis.horizontal,
+                  itemCount: sizes.length,
+                  itemBuilder: (context, index) => Padding(
+                    padding: const EdgeInsets.all(4),
+                    child: InkWell(
+                      onTap: () => jump(index),
+                      child: Container(
+                        width: 42,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          border: Border.all(
+                            color: position.$1 == index
+                                ? const Color(0xff2869e8)
+                                : const Color(0xffdce4ef),
+                            width: position.$1 == index ? 2 : 1,
+                          ),
+                        ),
+                        child: Column(
+                          children: [
+                            Expanded(
+                              child: _PageThumbnail(
+                                key: ValueKey((widget.document.bytes, index)),
+                                document: widget.document,
+                                engine: widget.engine,
+                                index: index,
+                              ),
+                            ),
+                            Text(
+                              '${index + 1}',
+                              style: const TextStyle(fontSize: 10),
+                            ),
+                          ],
                         ),
                       ),
                     ),
@@ -147,33 +287,51 @@ class _EditorCanvasState extends State<EditorCanvas> {
                 ),
               ),
             ),
-            Container(
-              height: 36,
-              color: Colors.white.withValues(alpha: .9),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  IconButton(
-                    tooltip: '缩小',
-                    padding: EdgeInsets.zero,
-                    iconSize: 16,
-                    onPressed: () =>
-                        setState(() => zoom = (zoom - .25).clamp(1, 3)),
-                    icon: const Icon(Icons.remove),
-                  ),
-                  Text(
-                    '${(zoom * 100).round()}%',
-                    style: const TextStyle(fontSize: 11),
-                  ),
-                  IconButton(
-                    tooltip: '放大',
-                    padding: EdgeInsets.zero,
-                    iconSize: 16,
-                    onPressed: () =>
-                        setState(() => zoom = (zoom + .25).clamp(1, 3)),
-                    icon: const Icon(Icons.add),
-                  ),
-                ],
+            SizedBox(
+              height: 34,
+              child: ValueListenableBuilder<(int, double)>(
+                valueListenable: progress,
+                builder: (context, position, _) => Row(
+                  children: [
+                    const SizedBox(width: 8),
+                    Text(
+                      '${position.$1 + 1}/${sizes.length}',
+                      style: const TextStyle(fontSize: 11),
+                    ),
+                    Expanded(
+                      child: Slider(
+                        value: position.$2,
+                        onChanged: (value) {
+                          if (scroll.hasClients) {
+                            scroll.jumpTo(
+                              value * scroll.position.maxScrollExtent,
+                            );
+                          }
+                        },
+                      ),
+                    ),
+                    if (widget.source && widget.onMirrorPage != null)
+                      IconButton(
+                        tooltip: '在左侧复制为镜像页',
+                        iconSize: 16,
+                        onPressed: widget.enabled
+                            ? () => widget.onMirrorPage!(position.$1)
+                            : null,
+                        icon: const Icon(Icons.flip_to_front),
+                      ),
+                    if (widget.onCopyPage != null)
+                      TextButton.icon(
+                        onPressed: widget.enabled
+                            ? () => widget.onCopyPage!(position.$1)
+                            : null,
+                        icon: const Icon(Icons.copy, size: 14),
+                        label: Text(
+                          widget.source ? '复制到新单据' : '复制此页',
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                      ),
+                  ],
+                ),
               ),
             ),
           ],
@@ -181,125 +339,238 @@ class _EditorCanvasState extends State<EditorCanvas> {
       },
     ),
   );
-  List<Widget> selection(double w, double h) {
-    final object = widget.selected!, rect = preview ?? object.bounds;
-    final canMove =
-        !widget.source &&
-        widget.enabled &&
-        object.kind == PdfObjectKind.image &&
-        widget.pending == null &&
-        !object.nested;
-    void start() {
-      gestureStart = rect;
-      gestureDelta = Offset.zero;
-    }
+}
 
-    void update(DragUpdateDetails d, bool resize, [Offset? corner]) {
-      if (gestureStart == null) return;
-      gestureDelta += Offset(d.delta.dx / w, d.delta.dy / h);
-      final r = gestureStart!;
-      setState(() {
-        if (resize) {
-          final left = corner?.dx == r.left, top = corner?.dy == r.top;
-          final x = gestureDelta.dx * (left ? -1 : 1) / r.width,
-              y = gestureDelta.dy * (top ? -1 : 1) / r.height;
-          final scale = (1 + (x.abs() > y.abs() ? x : y)).clamp(
-            math.min(.02 / r.width, .02 / r.height),
-            math.min(
-              (left ? r.right : 1 - r.left) / r.width,
-              (top ? r.bottom : 1 - r.top) / r.height,
-            ),
-          );
-          final newW = r.width * scale, newH = r.height * scale;
-          preview = Rect.fromLTWH(
-            left ? r.right - newW : r.left,
-            top ? r.bottom - newH : r.top,
-            newW,
-            newH,
-          );
-        } else {
-          preview = Rect.fromLTWH(
-            (r.left + gestureDelta.dx).clamp(0, math.max(0, 1 - r.width)),
-            (r.top + gestureDelta.dy).clamp(0, math.max(0, 1 - r.height)),
-            r.width,
-            r.height,
-          );
-        }
-      });
-    }
+class _PageThumbnail extends StatefulWidget {
+  final EditDocument document;
+  final PdfEditEngine engine;
+  final int index;
+  const _PageThumbnail({
+    super.key,
+    required this.document,
+    required this.engine,
+    required this.index,
+  });
+  @override
+  State<_PageThumbnail> createState() => _PageThumbnailState();
+}
 
-    void end() {
-      if (preview != null) widget.onMove?.call(object, preview!);
-      gestureStart = null;
-    }
-
-    return [
-      if (widget.selectionToolbar != null)
-        Positioned(
-          left: (rect.center.dx * w - 108).clamp(0, math.max(0, w - 216)),
-          top: math.max(0, rect.top * h - 50),
-          child: Material(
-            color: Colors.white,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
-              side: const BorderSide(color: Color(0xffe4ebf4)),
-            ),
-            clipBehavior: Clip.antiAlias,
-            child: SizedBox(width: 216, child: widget.selectionToolbar),
+class _PageThumbnailState extends State<_PageThumbnail> {
+  late Future<Uint8List> image = widget.document.thumbnail(
+    widget.engine,
+    widget.index,
+  );
+  @override
+  Widget build(BuildContext context) => FutureBuilder<Uint8List>(
+    future: image,
+    builder: (context, snapshot) {
+      if (snapshot.hasError) {
+        return IconButton(
+          icon: const Icon(Icons.refresh, size: 16),
+          tooltip: '重试缩略图',
+          onPressed: () => setState(() {
+            image = widget.document.thumbnail(widget.engine, widget.index);
+          }),
+        );
+      }
+      if (!snapshot.hasData) {
+        return const Center(
+          child: SizedBox(
+            width: 12,
+            height: 12,
+            child: CircularProgressIndicator(strokeWidth: 1),
           ),
-        ),
-      Positioned(
-        left: rect.left * w,
-        top: rect.top * h,
-        width: math.max(2, rect.width * w),
-        height: math.max(2, rect.height * h),
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: () => widget.onSelect(object),
-          onPanStart: canMove ? (_) => start() : null,
-          onPanUpdate: canMove ? (d) => update(d, false) : null,
-          onPanEnd: canMove ? (_) => end() : null,
-          child: Container(
-            decoration: BoxDecoration(
-              border: Border.all(color: const Color(0xff2869e8), width: 2),
-              color: Colors.blue.withValues(alpha: .04),
-            ),
-          ),
-        ),
-      ),
-      if (canMove)
-        for (final corner in [
-          rect.topLeft,
-          rect.topRight,
-          rect.bottomLeft,
-          rect.bottomRight,
-        ])
-          Positioned(
-            left: corner.dx * w - 9,
-            top: corner.dy * h - 9,
-            width: 18,
-            height: 18,
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onPanStart: (_) => start(),
-              onPanUpdate: (d) => update(d, true, corner),
-              onPanEnd: (_) => end(),
-              child: Center(
-                child: Container(
-                  width: 11,
-                  height: 11,
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    border: Border.all(
-                      color: const Color(0xff2869e8),
-                      width: 2,
-                    ),
-                    shape: BoxShape.circle,
-                  ),
+        );
+      }
+      return Image.memory(snapshot.data!, fit: BoxFit.contain);
+    },
+  );
+}
+
+class _RepairPage extends StatefulWidget {
+  final PdfEditSession? session;
+  final RepairConnections? connections;
+  final ValueChanged<int>? onCopyPage;
+  final EditDocument document;
+  final PdfEditEngine engine;
+  final int page;
+  final bool source, enabled;
+  final ValueNotifier<Map<String, RepairSelection>> selection;
+  const _RepairPage({
+    super.key,
+    this.session,
+    this.connections,
+    this.onCopyPage,
+    required this.document,
+    required this.engine,
+    required this.page,
+    required this.source,
+    required this.enabled,
+    required this.selection,
+  });
+  @override
+  State<_RepairPage> createState() => _RepairPageState();
+}
+
+class _RepairPageState extends State<_RepairPage> {
+  late Future<PdfPageSnapshot> preview = widget.document.preview(
+    widget.engine,
+    widget.page,
+    isNeeded: () => mounted,
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    widget.connections?.pages[(widget.source, widget.page)] = context;
+  }
+
+  @override
+  void dispose() {
+    if (identical(
+      widget.connections?.pages[(widget.source, widget.page)],
+      context,
+    )) {
+      widget.connections?.pages.remove((widget.source, widget.page));
+    }
+    widget.document.releasePreview(widget.page, preview);
+    super.dispose();
+  }
+
+  void select(
+    PdfPageSnapshot snapshot,
+    Offset local,
+    Size size, {
+    bool additive = false,
+  }) {
+    if (!widget.source || !widget.enabled) return;
+    final at = Offset(local.dx / size.width, local.dy / size.height);
+    final matches = snapshot.objects.reversed.where(
+      (object) =>
+          object.kind == PdfObjectKind.image && object.bounds.contains(at),
+    );
+    if (matches.isEmpty) return;
+    final object = matches.first, key = '${widget.page}:${matches.first.id}';
+    final keyboard = HardwareKeyboard.instance;
+    final multiple =
+        additive ||
+        keyboard.isControlPressed ||
+        keyboard.isMetaPressed ||
+        keyboard.isShiftPressed;
+    final next = multiple
+        ? Map<String, RepairSelection>.of(widget.selection.value)
+        : <String, RepairSelection>{};
+    if (multiple && next.containsKey(key)) {
+      next.remove(key);
+    } else {
+      next[key] = (page: widget.page, object: object, size: snapshot.size);
+    }
+    widget.selection.value = next;
+  }
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<PdfPageSnapshot>(
+    future: preview,
+    builder: (context, state) {
+      if (state.hasError) {
+        return ColoredBox(
+          color: Colors.white,
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('本页加载失败'),
+                TextButton(
+                  onPressed: () => setState(() {
+                    preview = widget.document.preview(
+                      widget.engine,
+                      widget.page,
+                    );
+                  }),
+                  child: const Text('重试'),
                 ),
+              ],
+            ),
+          ),
+        );
+      }
+      final snapshot = state.data;
+      if (snapshot == null) {
+        return const ColoredBox(
+          color: Colors.white,
+          child: Center(
+            child: SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          ),
+        );
+      }
+      final paper = Image.memory(
+        snapshot.png,
+        fit: BoxFit.fill,
+        gaplessPlayback: true,
+        filterQuality: FilterQuality.medium,
+      );
+      if (!widget.source) {
+        if (widget.session == null) return paper;
+        return RepairPreview(
+          session: widget.session!,
+          document: widget.document,
+          page: widget.page,
+          snapshot: snapshot,
+          onCopyPage: widget.onCopyPage,
+        );
+      }
+      return LayoutBuilder(
+        builder: (context, box) {
+          final size = Size(box.maxWidth, box.maxHeight);
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTapUp: (details) => select(snapshot, details.localPosition, size),
+            onLongPressStart: (details) =>
+                select(snapshot, details.localPosition, size, additive: true),
+            child: ValueListenableBuilder<Map<String, RepairSelection>>(
+              valueListenable: widget.selection,
+              child: Positioned.fill(child: paper),
+              builder: (context, selected, child) => Stack(
+                children: [
+                  child!,
+                  for (final item in selected.values.where(
+                    (item) => item.page == widget.page,
+                  ))
+                    Positioned(
+                      left: item.object.bounds.left * size.width,
+                      top: item.object.bounds.top * size.height,
+                      width: item.object.bounds.width * size.width,
+                      height: item.object.bounds.height * size.height,
+                      child: IgnorePointer(
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: const Color(0x202869e8),
+                            border: Border.all(
+                              color: const Color(0xff2869e8),
+                              width: 2,
+                            ),
+                          ),
+                          child: const Align(
+                            alignment: Alignment.topRight,
+                            child: Icon(
+                              Icons.check_circle,
+                              size: 20,
+                              color: Color(0xff2869e8),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
-          ),
-    ];
-  }
+          );
+        },
+      );
+    },
+  );
 }

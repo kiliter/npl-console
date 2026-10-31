@@ -1,12 +1,19 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../core/contracts.dart';
+import '../core/inter_result_decryption.dart';
 import '../core/maintenance_controller.dart';
 import 'query_sheet.dart';
 import 'work_details.dart';
 
-/// 数据查询面板：按物理表直查 woinfo/wobizinfo/wosigninfo/wopicinfo，
+// 顶层入口仅接收数据快照，避免 isolate 捕获面板、控制器或日志对象。
+({List<Record> rows, int failures}) _decryptInterResult(
+  ({List<Record> rows, String key}) input,
+) => InterResultDecryption.decryptRows(input.rows, input.key);
+
+/// 数据查询面板：按物理表查询业务记录和接口结果，
 /// 复用现有只读 queryList 接口；结果为表格列表，点击行查看完整字段。
 class TableQuerySheet extends StatefulWidget {
   final MaintenanceController controller;
@@ -18,6 +25,20 @@ class TableQuerySheet extends StatefulWidget {
 class _TableQuerySheetState extends State<TableQuerySheet> {
   final caseNo = TextEditingController();
   final sysAccept = TextEditingController();
+  final interUrl = TextEditingController();
+  final retCode = TextEditingController();
+  final decryptKey = TextEditingController();
+  List<Record>? originalRows;
+  String? decryptionStatus;
+  bool decrypting = false;
+  int _decryptionGeneration = 0;
+  int _queryGeneration = 0;
+
+  void invalidateDecryption() {
+    _decryptionGeneration++;
+    decrypting = false;
+  }
+
   TableKind table = TableKind.woinfo;
   DateTime? month;
   String? error;
@@ -25,8 +46,14 @@ class _TableQuerySheetState extends State<TableQuerySheet> {
   List<Record>? rows;
   @override
   void dispose() {
+    _queryGeneration++;
+    invalidateDecryption();
     caseNo.dispose();
     sysAccept.dispose();
+    interUrl.dispose();
+    retCode.dispose();
+    decryptKey.clear();
+    decryptKey.dispose();
     super.dispose();
   }
 
@@ -37,6 +64,8 @@ class _TableQuerySheetState extends State<TableQuerySheet> {
   /// 先由业务契约本地校验，合法条件才发起只读查询，错误就地展示。
   Future<void> submit() async {
     if (running) return;
+    invalidateDecryption();
+    final generation = ++_queryGeneration;
     Record body;
     try {
       body = tableQueryBody(
@@ -44,46 +73,112 @@ class _TableQuerySheetState extends State<TableQuerySheet> {
         caseNo: caseNo.text,
         sysAccept: sysAccept.text,
         opMonth: monthText,
+        interUrl: table == TableKind.interResult ? interUrl.text : '',
+        retCode: table == TableKind.interResult ? retCode.text : '',
       );
     } on FormatException catch (e) {
-      setState(() => error = e.message);
+      setState(() {
+        error = e.message;
+        rows = originalRows;
+        decryptionStatus = null;
+      });
       return;
     }
     setState(() {
       error = null;
       running = true;
       rows = null;
+      originalRows = null;
+      decryptionStatus = null;
     });
     try {
       final result = await widget.controller.queryTable(table, body);
-      if (!mounted) return;
+      if (!mounted || generation != _queryGeneration) return;
       setState(() {
         running = false;
         rows = result;
+        originalRows = result;
       });
+      if (table == TableKind.interResult) decryptResults();
     } on FormatException catch (e) {
-      if (!mounted) return;
+      if (!mounted || generation != _queryGeneration) return;
       setState(() {
         running = false;
         error = e.message;
       });
     } catch (_) {
       // 用户主动取消或其它代次失效，恢复表单但不报错。
-      if (!mounted) return;
+      if (!mounted || generation != _queryGeneration) return;
       setState(() => running = false);
     }
   }
 
   void cancel() {
+    _queryGeneration++;
+    invalidateDecryption();
     widget.controller.cancel();
     setState(() => running = false);
+  }
+
+  Future<void> decryptResults() async {
+    if (running ||
+        decrypting ||
+        originalRows == null ||
+        table != TableKind.interResult) {
+      return;
+    }
+    final source = originalRows!;
+    final key = decryptKey.text;
+    final generation = ++_decryptionGeneration;
+    final encryptedCount = source.fold<int>(
+      0,
+      (count, record) =>
+          count +
+          InterResultDecryption.fields
+              .where(
+                (field) => InterResultDecryption.isEncrypted(record[field]),
+              )
+              .length,
+    );
+    setState(() {
+      rows = source;
+      decrypting = encryptedCount > 0 && key.isNotEmpty;
+      decryptionStatus = encryptedCount == 0
+          ? '结果中没有需要解密的 SM4 字段'
+          : key.isEmpty
+          ? '检测到 $encryptedCount 个加密字段，请输入密钥后解密'
+          : '正在本地解密…';
+    });
+    if (!decrypting) return;
+    try {
+      final result = await compute(_decryptInterResult, (
+        rows: source,
+        key: key,
+      ));
+      if (!mounted || generation != _decryptionGeneration) return;
+      setState(() {
+        decrypting = false;
+        rows = result.rows;
+        decryptionStatus = result.failures == 0
+            ? '已本地解密 $encryptedCount 个字段；复制详情将包含明文'
+            : '已解密 ${encryptedCount - result.failures} 个字段，${result.failures} 个字段解密失败并保留密文，请核对密钥';
+      });
+    } catch (_) {
+      if (!mounted || generation != _decryptionGeneration) return;
+      // 不输出异常内容，避免意外携带密钥或业务明文。
+      setState(() {
+        decrypting = false;
+        decryptionStatus = 'SM4 解密失败，请核对密钥（须为 16 个 UTF-8 字节）或密文完整性';
+      });
+    }
   }
 
   Future<void> pickMonth() async {
     final selected = await showDialog<DateTime>(
       context: context,
-      builder: (_) =>
-          MonthPicker(current: month ?? DateTime(DateTime.now().year, DateTime.now().month)),
+      builder: (_) => MonthPicker(
+        current: month ?? DateTime(DateTime.now().year, DateTime.now().month),
+      ),
     );
     if (selected != null && mounted) setState(() => month = selected);
   }
@@ -93,30 +188,38 @@ class _TableQuerySheetState extends State<TableQuerySheet> {
     TextEditingController input, {
     String? hint,
     bool number = false,
-  }) =>
-      Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
-          const SizedBox(height: 8),
-          TextField(
-            controller: input,
-            enabled: !running,
-            keyboardType: number ? TextInputType.number : TextInputType.text,
-            autocorrect: false,
-            onSubmitted: (_) => submit(),
-            decoration: InputDecoration(hintText: hint),
-          ),
-        ],
-      );
+  }) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
+      const SizedBox(height: 8),
+      TextField(
+        controller: input,
+        enabled: !running,
+        keyboardType: number ? TextInputType.number : TextInputType.text,
+        autocorrect: false,
+        onSubmitted: (_) => submit(),
+        decoration: InputDecoration(hintText: hint),
+      ),
+    ],
+  );
 
   @override
   Widget build(BuildContext context) {
-    final fields = rows == null || rows!.isEmpty
+    final fields =
+        table == TableKind.interResult && rows != null && rows!.isNotEmpty
+        ? ['caseNo', 'sysAccept', 'interUrl', 'retCode', 'retMsg', 'createTime']
+        : rows == null || rows!.isEmpty
         ? <String>[]
         : rows!.first.keys.take(8).toList();
     return PopScope(
       canPop: !running,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) {
+          _queryGeneration++;
+          invalidateDecryption();
+        }
+      },
       child: SafeArea(
         child: Column(
           children: [
@@ -161,31 +264,99 @@ class _TableQuerySheetState extends State<TableQuerySheet> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    SegmentedButton<TableKind>(
-                      segments: [
+                    DropdownButtonFormField<TableKind>(
+                      initialValue: table,
+                      isExpanded: true,
+                      decoration: const InputDecoration(labelText: '查询表'),
+                      items: [
                         for (final item in TableKind.values)
-                          ButtonSegment(
+                          DropdownMenuItem(
                             value: item,
-                            label: Text(
-                              item.label,
+                            child: Text(
+                              '${item.label}（${item.tableName}）',
                               style: const TextStyle(fontSize: 12),
                             ),
                           ),
                       ],
-                      selected: {table},
-                      showSelectedIcon: false,
-                      onSelectionChanged: running
+                      onChanged: running
                           ? null
                           : (v) => setState(() {
-                              table = v.single;
+                              if (v == null) return;
+                              _queryGeneration++;
+                              invalidateDecryption();
+                              table = v;
                               error = null;
                               rows = null;
+                              originalRows = null;
+                              decryptKey.clear();
+                              decryptionStatus = null;
                             }),
                     ),
                     const SizedBox(height: 24),
                     conditionField('单据号', caseNo, hint: '输入完整单据号，可单独查询'),
                     const SizedBox(height: 18),
                     conditionField('受理流水', sysAccept, hint: '按受理流水查询需选择业务月份'),
+                    if (table == TableKind.interResult) ...[
+                      const SizedBox(height: 18),
+                      conditionField(
+                        '接口标识',
+                        interUrl,
+                        hint: '可选；签字识别填写 signcheck',
+                      ),
+                      const SizedBox(height: 18),
+                      conditionField('返回码', retCode, hint: '可选，按原始返回码精确查询'),
+                      const SizedBox(height: 18),
+                      TextField(
+                        controller: decryptKey,
+                        enabled: !running,
+                        obscureText: true,
+                        autocorrect: false,
+                        enableSuggestions: false,
+                        enableIMEPersonalizedLearning: false,
+                        decoration: const InputDecoration(
+                          labelText: 'SM4 解密密钥',
+                          hintText: '原始密钥，UTF-8 编码须为 16 字节',
+                        ),
+                        onChanged: (_) => setState(() {
+                          invalidateDecryption();
+                          rows = originalRows;
+                          decryptionStatus = '密钥已变更，请重新解密';
+                        }),
+                        onSubmitted: (_) => decryptResults(),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        '密钥仅保留在当前面板，不发送到服务器、不保存。仅解密返回信息、返回详情和请求参数。',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                      Wrap(
+                        spacing: 12,
+                        children: [
+                          TextButton(
+                            onPressed:
+                                running || decrypting || originalRows == null
+                                ? null
+                                : decryptResults,
+                            child: const Text('本地解密'),
+                          ),
+                          TextButton(
+                            onPressed: running
+                                ? null
+                                : () {
+                                    invalidateDecryption();
+                                    decryptKey.clear();
+                                    setState(() {
+                                      rows = originalRows;
+                                      decryptionStatus = '已清除密钥并恢复原始结果';
+                                    });
+                                  },
+                            child: const Text('清除密钥及明文'),
+                          ),
+                        ],
+                      ),
+                      if (decrypting) const LinearProgressIndicator(),
+                      if (decryptionStatus != null) Text(decryptionStatus!),
+                    ],
                     const SizedBox(height: 18),
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.end,
@@ -294,28 +465,24 @@ class _TableQuerySheetState extends State<TableQuerySheet> {
                                 rows: [
                                   for (final record in rows!)
                                     DataRow(
-                                      onSelectChanged: (_) =>
-                                          showDialog<void>(
-                                            context: context,
-                                            builder: (_) =>
-                                                RecordDetailsDialog(
-                                                  table: table,
-                                                  record: record,
-                                                ),
-                                          ),
+                                      onSelectChanged: (_) => showDialog<void>(
+                                        context: context,
+                                        builder: (_) => RecordDetailsDialog(
+                                          table: table,
+                                          record: record,
+                                        ),
+                                      ),
                                       cells: [
                                         for (final key in fields)
                                           DataCell(
                                             ConstrainedBox(
-                                              constraints:
-                                                  const BoxConstraints(
-                                                    maxWidth: 220,
-                                                  ),
+                                              constraints: const BoxConstraints(
+                                                maxWidth: 220,
+                                              ),
                                               child: Text(
                                                 _cellText(record[key]),
                                                 maxLines: 1,
-                                                overflow:
-                                                    TextOverflow.ellipsis,
+                                                overflow: TextOverflow.ellipsis,
                                                 style: const TextStyle(
                                                   fontSize: 12,
                                                 ),
@@ -393,9 +560,7 @@ class RecordDetailsDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final entries = record.entries
-        .where((e) => _hasValue(e.value))
-        .toList();
+    final entries = record.entries.where((e) => _hasValue(e.value)).toList();
     return AlertDialog(
       title: Text('${table.label}记录详情 · ${entries.length} 项'),
       content: SizedBox(
@@ -407,9 +572,7 @@ class RecordDetailsDialog extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.symmetric(vertical: 10),
                 decoration: const BoxDecoration(
-                  border: Border(
-                    bottom: BorderSide(color: Color(0xffedf1f6)),
-                  ),
+                  border: Border(bottom: BorderSide(color: Color(0xffedf1f6))),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,

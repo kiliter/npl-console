@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'local_config.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -17,6 +18,7 @@ Future<void> migrateSandboxPreferences({
 }) async {
   if (!Platform.isMacOS) return;
   try {
+    if (await const LocalConfig().readFile('connection.migrated') != null) return;
     final home = Platform.environment['HOME'];
     if (home == null) return;
     final legacy = File(

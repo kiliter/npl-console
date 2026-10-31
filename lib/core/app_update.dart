@@ -4,7 +4,7 @@ import 'package:archive/archive.dart';
 import 'package:http/http.dart' as http;
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'local_config.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 /// GitHub 加速站前缀的持久化存取；前缀为空表示直连 GitHub。
@@ -14,11 +14,11 @@ class GithubProxyStore {
 
   /// 读取已保存的加速站前缀；未设置时返回空串。
   Future<String> load() async =>
-      (await SharedPreferences.getInstance()).getString(_key) ?? '';
+      await const LocalConfig().getString(_key) ?? '';
 
   /// 保存加速站前缀；传入空白时清除设置。
   Future<void> save(String prefix) async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = const LocalConfig();
     final value = prefix.trim();
     if (value.isEmpty) {
       await prefs.remove(_key);

@@ -111,8 +111,8 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
     return await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
-            title: const Text('单据编辑尚未保存'),
-            content: const Text('更改连接会清空当前编辑和共享素材，请先保存副本。'),
+            title: const Text('单据修复尚未保存'),
+            content: const Text('更改连接会清空当前修复结果和共享区，请先保存副本。'),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context, false),
@@ -294,7 +294,7 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
                   child: Row(
                     children: [
                       tab('工单查询', false, Icons.search),
-                      tab('在线单据编辑', true, Icons.edit_document),
+                      tab('单据图片修复', true, Icons.edit_document),
                     ],
                   ),
                 ),
@@ -363,7 +363,7 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
         if (mobile)
           const Expanded(
             child: Text(
-              '在线单据编辑',
+              '单据图片修复',
               style: TextStyle(
                 fontSize: 17,
                 fontWeight: FontWeight.w700,
@@ -382,7 +382,7 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
           ),
           const SizedBox(width: 32),
           tab('工单查询', false, Icons.search),
-          tab('在线单据编辑', true, Icons.edit_document),
+          tab('单据图片修复', true, Icons.edit_document),
           const Spacer(),
         ],
         environmentMenu(),

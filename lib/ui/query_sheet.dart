@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import '../core/local_config.dart';
 import '../core/contracts.dart';
 import '../core/maintenance_controller.dart';
 
@@ -42,7 +42,7 @@ const _historyKey = 'query_history_v1';
 
 /// 最近三十次合法提交按时间倒序保存，不因失败或取消丢失查询条件。
 Future<void> saveQueryHistory(List<QueryDraft> history) async {
-  final prefs = await SharedPreferences.getInstance();
+  final prefs = const LocalConfig();
   final saved = await prefs.setString(
     _historyKey,
     jsonEncode(history.take(30).map((q) => q.toJson()).toList()),
@@ -52,8 +52,8 @@ Future<void> saveQueryHistory(List<QueryDraft> history) async {
 
 /// 进入查询面板时读取历史，不发起网络请求。
 Future<List<QueryDraft>> loadQueryHistory() async {
-  final prefs = await SharedPreferences.getInstance();
-  final raw = prefs.getString(_historyKey);
+  final prefs = const LocalConfig();
+  final raw = await prefs.getString(_historyKey);
   if (raw == null) return [];
   return (jsonDecode(raw) as List)
       .take(30)

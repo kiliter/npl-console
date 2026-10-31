@@ -1,3 +1,4 @@
+import 'package:npl_maintenance/core/local_config.dart';
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:npl_maintenance/core/contracts.dart';
@@ -91,8 +92,12 @@ void main() {
     expect(c.settings.baseUrl, 'https://prod.invalid/npl');
     expect(c.works, isEmpty);
     expect(c.busy, isFalse);
-    final prefs = await SharedPreferences.getInstance();
-    expect(jsonDecode(prefs.getString('connection')!)['active'], 1);
+    expect(
+      jsonDecode(
+        (await const LocalConfig().getString('connection'))!,
+      )['active'],
+      1,
+    );
     c.dispose();
   });
 }

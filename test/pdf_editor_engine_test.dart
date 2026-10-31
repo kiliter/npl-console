@@ -236,4 +236,116 @@ void main() {
     expect(again.bounds.left, closeTo(.5, .002));
     expect(again.bounds.top, closeTo(.4, .002));
   });
+  test('批量跨页修复保留页码和坐标，匹配旧图直接替换且保留文字', () async {
+    final source = File('test/fixtures/editor.pdf').readAsBytesSync();
+    final placements = <PdfImagePlacement>[];
+    for (var index = 0; index < 3; index++) {
+      final page = await engine.inspect(source, index);
+      for (final object in page.objects.where(
+        (o) => o.kind == PdfObjectKind.image,
+      )) {
+        placements.add(
+          PdfImagePlacement(
+            await engine.extractImage(source, index, object),
+            index,
+            object.bounds,
+            page.size,
+            basis: object.basis,
+          ),
+        );
+      }
+    }
+    expect(placements.map((p) => p.page).toSet(), {0, 1, 2});
+    final repaired = await engine.synchronizeImages(source, placements);
+    final twice = await engine.synchronizeImages(repaired, placements);
+    for (var index = 0; index < 3; index++) {
+      final before = await engine.inspect(source, index),
+          after = await engine.inspect(twice, index);
+      final beforeImages = before.objects
+          .where((o) => o.kind == PdfObjectKind.image)
+          .toList();
+      final afterImages = after.objects
+          .where((o) => o.kind == PdfObjectKind.image)
+          .toList();
+      expect(afterImages.length, beforeImages.length);
+      for (var i = 0; i < beforeImages.length; i++) {
+        expect(
+          afterImages[i].bounds.left,
+          closeTo(beforeImages[i].bounds.left, .002),
+        );
+        expect(
+          afterImages[i].bounds.top,
+          closeTo(beforeImages[i].bounds.top, .002),
+        );
+        expect(
+          afterImages[i].bounds.width,
+          closeTo(beforeImages[i].bounds.width, .002),
+        );
+        expect(
+          afterImages[i].bounds.height,
+          closeTo(beforeImages[i].bounds.height, .002),
+        );
+        for (var j = 0; j < 3; j++) {
+          expect(
+            (afterImages[i].basis![j] - beforeImages[i].basis![j]).distance,
+            lessThan(.002),
+          );
+        }
+      }
+      expect(
+        after.objects
+            .where((o) => o.kind == PdfObjectKind.text)
+            .map((o) => o.text),
+        before.objects
+            .where((o) => o.kind == PdfObjectKind.text)
+            .map((o) => o.text),
+      );
+    }
+  });
+  test('缺少目标页整批失败；新单据无图时在指定页插入', () async {
+    final png = picture(0, 200, 0), page = await engine.inspect(original, 0);
+    final first = PdfImagePlacement(
+      png,
+      0,
+      const Rect.fromLTWH(.2, .3, .2, .1),
+      page.size,
+    );
+    await expectLater(
+      engine.synchronizeImages(original, [
+        first,
+        PdfImagePlacement(png, 99, first.bounds, page.size),
+      ]),
+      throwsFormatException,
+    );
+    expect(
+      (await engine.inspect(
+        original,
+        0,
+      )).objects.where((o) => o.kind == PdfObjectKind.image),
+      isEmpty,
+    );
+    final repaired = await engine.synchronizeImages(original, [
+      first,
+      PdfImagePlacement(png, 2, const Rect.fromLTWH(.4, .5, .2, .1), page.size),
+    ]);
+    expect(
+      (await engine.inspect(
+        repaired,
+        0,
+      )).objects.where((o) => o.kind == PdfObjectKind.image),
+      hasLength(1),
+    );
+    expect(
+      (await engine.inspect(
+        repaired,
+        1,
+      )).objects.where((o) => o.kind == PdfObjectKind.image),
+      isEmpty,
+    );
+    final last = (await engine.inspect(
+      repaired,
+      2,
+    )).objects.singleWhere((o) => o.kind == PdfObjectKind.image);
+    expect(last.bounds.top, closeTo(.5, .002));
+  });
 }

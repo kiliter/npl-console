@@ -1,3 +1,4 @@
+import 'package:npl_maintenance/core/local_config.dart';
 import 'dart:io';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -30,8 +31,11 @@ void main() {
     );
     expect(first.keyPersisted, isTrue);
     final prefs = await SharedPreferences.getInstance();
-    expect(prefs.getKeys(), {'connection'});
-    expect(prefs.getString('connection'), isNot(contains('fixture-password')));
+    expect(prefs.getKeys(), isEmpty);
+    expect(
+      await const LocalConfig().getString('connection'),
+      isNot(contains('fixture-password')),
+    );
     first.dispose();
     final second = MaintenanceController();
     await second.restore();
