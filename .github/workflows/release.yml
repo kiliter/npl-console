@@ -247,6 +247,9 @@ jobs:
       GH_REPO: kiliter/npl-console
       TAG: "${{ needs.version.outputs.tag }}"
     steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: "${{ needs.version.outputs.sha }}"
     - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
       with:
         pattern: release-*
@@ -256,7 +259,11 @@ jobs:
       shell: bash
       run: |-
         # 仅在 GitHub runner 汇集产物，不下载到维护者电脑。
-        cat > notes.md <<'NOTES'
+        cp "docs/releases/$TAG.md" notes.md
+        cat >> notes.md <<'NOTES'
+
+        ---
+
         四端均由 GitHub Actions 从对应版本标签构建，使用 Release 正式模式。
 
         - macOS：Universal DMG + PKG 安装器，ad-hoc 签名，未经 Apple 公证。

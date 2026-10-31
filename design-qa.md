@@ -36,7 +36,7 @@ final result: passed
 - 系统保存取消保持 dirty；模拟系统保存成功后重新用 PDFium 打开实际导出字节，页数一致。
 - 对象增删改、中文 Unicode 提取、旋转页、组合图片替换、页面复制独立性、迟到结果隔离均有测试。
 - `flutter analyze --no-pub`：无问题。
-- `flutter test --no-pub`：96 passed，2 skipped（Linux 不执行依赖 macOS plutil 的历史迁移测试）。
+- `flutter test --no-pub`：98 passed，2 skipped（Linux 不执行依赖 macOS plutil 的历史迁移测试）。
 - `git diff --check`：通过。
 
 ## 仍需真实环境验收
