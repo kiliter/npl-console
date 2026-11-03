@@ -1,3 +1,4 @@
+import '../pdf_diagnostics.dart';
 import 'dart:convert';
 import 'dart:math' as math;
 import 'package:image/image.dart' as img;
@@ -189,10 +190,16 @@ class PdfEditSession extends ChangeNotifier {
     error = null;
     notifyListeners();
     try {
-      final nextTarget = await engine.inspect(targetBytes, 0);
+      final nextTarget = await PdfDiagnostics.trace(
+        '目标单据解析及渲染',
+        () => engine.inspect(targetBytes, 0),
+      );
       final nextSource = sourceBytes == null
           ? null
-          : await engine.inspect(sourceBytes, 0);
+          : await PdfDiagnostics.trace(
+              '来源单据解析及渲染',
+              () => engine.inspect(sourceBytes, 0),
+            );
       if (_disposed || revision != _revision) return;
       materials.clear();
       syncStatus = null;

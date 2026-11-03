@@ -1,3 +1,5 @@
+import 'dart:async';
+import '../core/pdf_diagnostics.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:pdfrx/pdfrx.dart';
@@ -21,6 +23,49 @@ class PdfReader extends StatefulWidget {
 
 class _PdfReaderState extends State<PdfReader> {
   final controller = PdfViewerController();
+  String diagnosticId = '';
+  Timer? loadingTimer;
+  bool errorLogged = false;
+
+  void startDiagnostic() {
+    loadingTimer?.cancel();
+    diagnosticId = PdfDiagnostics.nextId();
+    errorLogged = false;
+    PdfDiagnostics.record(
+      '预览开始',
+      id: diagnosticId,
+      data: {'字节数': widget.bytes.length},
+    );
+    loadingTimer = Timer(const Duration(seconds: 20), () {
+      PdfDiagnostics.record('预览等待超过20秒', id: diagnosticId);
+    });
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    startDiagnostic();
+  }
+
+  @override
+  void didUpdateWidget(covariant PdfReader oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.bytes, widget.bytes) ||
+        oldWidget.name != widget.name) {
+      PdfDiagnostics.record('预览切换', id: diagnosticId);
+      document = null;
+      page = widget.initialPage;
+      startDiagnostic();
+    }
+  }
+
+  @override
+  void dispose() {
+    loadingTimer?.cancel();
+    PdfDiagnostics.record('预览关闭', id: diagnosticId);
+    super.dispose();
+  }
+
   PdfDocument? document;
   late int page = widget.initialPage;
   // null = 跟随宽度（≥900 默认开启缩略图导航）；手动开关后记住选择。
@@ -195,6 +240,23 @@ class _PdfReaderState extends State<PdfReader> {
                     controller: controller,
                     initialPageNumber: widget.initialPage,
                     params: PdfViewerParams(
+                      errorBannerBuilder: (context, error, stack, ref) {
+                        loadingTimer?.cancel();
+                        if (!errorLogged) {
+                          errorLogged = true;
+                          PdfDiagnostics.record(
+                            '预览失败',
+                            id: diagnosticId,
+                            data: {
+                              '异常类型': error.runtimeType.toString(),
+                              '调用栈': stack?.toString(),
+                            },
+                          );
+                        }
+                        return const Center(
+                          child: Text('PDF 加载失败，请查看接口记录中的日志文件'),
+                        );
+                      },
                       margin: 18,
                       backgroundColor: const Color(0xffe9eef5),
                       pageDropShadow: const BoxShadow(
@@ -230,6 +292,12 @@ class _PdfReaderState extends State<PdfReader> {
                       ],
                       onViewerReady: (doc, ctrl) {
                         if (!mounted) return;
+                        loadingTimer?.cancel();
+                        PdfDiagnostics.record(
+                          '预览就绪',
+                          id: diagnosticId,
+                          data: {'页数': doc.pages.length},
+                        );
                         setState(() => document = doc);
                         WidgetsBinding.instance.addPostFrameCallback((_) {
                           if (mounted && controller.isReady) applyFit(fit);

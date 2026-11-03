@@ -1,4 +1,5 @@
 import 'repair_connections.dart';
+import '../../core/pdf_diagnostics.dart';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
@@ -112,9 +113,15 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
       loadError = null;
     });
     try {
-      final target = await widget.controller.loadEditorPdf(targetNo);
+      final target = await PdfDiagnostics.trace(
+        '目标单据查询及下载',
+        () => widget.controller.loadEditorPdf(targetNo),
+      );
       if (!mounted || revision != loadRevision) return;
-      final source = await widget.controller.loadEditorPdf(sourceNo);
+      final source = await PdfDiagnostics.trace(
+        '来源单据查询及下载',
+        () => widget.controller.loadEditorPdf(sourceNo),
+      );
       if (!mounted || revision != loadRevision) return;
       await session.load(
         targetNo,

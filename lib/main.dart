@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'core/pdf_diagnostics.dart';
 import 'core/maintenance_controller.dart';
 import 'core/settings_migration.dart';
 import 'core/update_check.dart';
@@ -10,6 +11,8 @@ import 'ui/update_dialog.dart';
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   final controller = MaintenanceController();
+  PdfDiagnostics.store = controller.logStore;
+  PdfDiagnostics.environment();
   runApp(MaintenanceApp(controller: controller));
   // 从 macOS 沙盒版升级时先搬回旧偏好，再恢复业务设置。
   migrateSandboxPreferences().then((_) => controller.restore());

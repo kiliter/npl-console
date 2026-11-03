@@ -1,4 +1,5 @@
 import 'dart:ffi' as ffi;
+import '../pdf_diagnostics.dart';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui';
@@ -76,11 +77,13 @@ class PdfEditEngine {
     Uint8List bytes,
     T Function(native.PDFium, native.FPDF_DOCUMENT) task,
   ) async {
-    pdfrxFlutterInitialize();
-    await pdfrxInitialize();
-    final result = await PdfrxEntryFunctions.instance.compute(
-      _nativeWorker<T>,
-      (bytes: bytes, task: task),
+    await PdfDiagnostics.trace('修复引擎初始化', () => pdfrxFlutterInitialize());
+    final result = await PdfDiagnostics.trace(
+      'PDF原生处理',
+      () => PdfrxEntryFunctions.instance.compute(_nativeWorker<T>, (
+        bytes: bytes,
+        task: task,
+      )),
     );
     if (result.error != null) throw FormatException(result.error!);
     return result.value as T;
@@ -90,7 +93,7 @@ class PdfEditEngine {
     Uint8List bytes,
     Future<T> Function(PdfDocument) task,
   ) async {
-    pdfrxFlutterInitialize();
+    await pdfrxFlutterInitialize();
     final doc = await PdfDocument.openData(
       bytes,
       sourceName: 'edit-${identityHashCode(bytes)}',
