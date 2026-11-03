@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'repair_connections.dart';
 import 'repair_preview.dart';
 import 'package:flutter/material.dart';
@@ -413,6 +414,16 @@ class _RepairPage extends StatefulWidget {
 }
 
 class _RepairPageState extends State<_RepairPage> {
+  Timer? slowTimer;
+  bool slow = false;
+  void watchLoading() {
+    slowTimer?.cancel();
+    slow = false;
+    slowTimer = Timer(const Duration(seconds: 20), () {
+      if (mounted) setState(() => slow = true);
+    });
+  }
+
   late Future<PdfPageSnapshot> preview = widget.document.preview(
     widget.engine,
     widget.page,
@@ -423,6 +434,7 @@ class _RepairPageState extends State<_RepairPage> {
   void initState() {
     super.initState();
     widget.connections?.pages[(widget.source, widget.page)] = context;
+    watchLoading();
   }
 
   @override
@@ -433,6 +445,7 @@ class _RepairPageState extends State<_RepairPage> {
     )) {
       widget.connections?.pages.remove((widget.source, widget.page));
     }
+    slowTimer?.cancel();
     widget.document.releasePreview(widget.page, preview);
     super.dispose();
   }
@@ -472,6 +485,7 @@ class _RepairPageState extends State<_RepairPage> {
   Widget build(BuildContext context) => FutureBuilder<PdfPageSnapshot>(
     future: preview,
     builder: (context, state) {
+      if (state.connectionState == ConnectionState.done) slowTimer?.cancel();
       if (state.hasError) {
         return ColoredBox(
           color: Colors.white,
@@ -482,6 +496,7 @@ class _RepairPageState extends State<_RepairPage> {
                 const Text('本页加载失败'),
                 TextButton(
                   onPressed: () => setState(() {
+                    watchLoading();
                     preview = widget.document.preview(
                       widget.engine,
                       widget.page,
@@ -496,6 +511,14 @@ class _RepairPageState extends State<_RepairPage> {
       }
       final snapshot = state.data;
       if (snapshot == null) {
+        if (slow) {
+          return Center(
+            child: Text(
+              '第 ${widget.page + 1} 页加载超过 20 秒\n请查看程序运行日志',
+              textAlign: TextAlign.center,
+            ),
+          );
+        }
         return const ColoredBox(
           color: Colors.white,
           child: Center(

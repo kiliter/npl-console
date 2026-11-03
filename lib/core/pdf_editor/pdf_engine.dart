@@ -1,5 +1,6 @@
 import 'dart:ffi' as ffi;
 import '../pdf_diagnostics.dart';
+import '../pdf_memory_document.dart';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui';
@@ -73,6 +74,8 @@ class PdfImagePlacement {
 /// PDFium calls run in pdfrx's worker isolate (including font callbacks). Every write uses a fresh
 /// document: failures cannot partially mutate the user's current revision.
 class PdfEditEngine {
+  // 左右文档、页面和缩略图共用队列，限制完整文档副本及位图同时驻留。
+  static Future<void> _documentQueue = Future.value();
   Future<T> _native<T>(
     Uint8List bytes,
     T Function(native.PDFium, native.FPDF_DOCUMENT) task,
@@ -89,41 +92,53 @@ class PdfEditEngine {
     return result.value as T;
   }
 
-  Future<T> _open<T>(
-    Uint8List bytes,
-    Future<T> Function(PdfDocument) task,
-  ) async {
-    await pdfrxFlutterInitialize();
-    final doc = await PdfDocument.openData(
-      bytes,
-      sourceName: 'edit-${identityHashCode(bytes)}',
+  Future<T> _open<T>(Uint8List bytes, Future<T> Function(PdfDocument) task) {
+    final result = _documentQueue.then((_) async {
+      final doc = await openMemoryPdf(bytes, 'edit-${identityHashCode(bytes)}');
+      try {
+        return await task(doc);
+      } finally {
+        await PdfDiagnostics.trace('PDF文档释放', () => doc.dispose());
+      }
+    });
+    _documentQueue = result.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
     );
-    try {
-      return await task(doc);
-    } finally {
-      await doc.dispose();
-    }
+    return result;
   }
 
   Future<PdfPageSnapshot> inspect(Uint8List bytes, int pageIndex) async {
-    final objects = await _inspectObjects(bytes, pageIndex);
+    final objects = await PdfDiagnostics.trace(
+      '页面对象解析',
+      () => _inspectObjects(bytes, pageIndex),
+      data: {'页码': pageIndex + 1, '文档': identityHashCode(bytes)},
+    );
     return _open(bytes, (doc) async {
       if (pageIndex < 0 || pageIndex >= doc.pages.length) {
         throw const FormatException('页码超出范围');
       }
       final p = doc.pages[pageIndex];
-      final image = await p.render(
-        fullWidth: math.min(p.width * 1.8, 1500),
-        fullHeight: math.min(p.width * 1.8, 1500) * p.height / p.width,
+      final image = await PdfDiagnostics.trace(
+        '页面位图渲染',
+        () => p.render(
+          fullWidth: math.min(p.width * 1.8, 1500),
+          fullHeight: math.min(p.width * 1.8, 1500) * p.height / p.width,
+        ),
+        data: {'页码': pageIndex + 1, '文档': identityHashCode(bytes)},
       );
       if (image == null) throw const FormatException('无法渲染 PDF');
       try {
         return PdfPageSnapshot(
-          await compute(_encodePreview, (
-            pixels: image.pixels,
-            width: image.width,
-            height: image.height,
-          )),
+          await PdfDiagnostics.trace(
+            '页面PNG编码',
+            () => compute(_encodePreview, (
+              pixels: image.pixels,
+              width: image.width,
+              height: image.height,
+            )),
+            data: {'页码': pageIndex + 1, '文档': identityHashCode(bytes)},
+          ),
           Size(p.width, p.height),
           objects,
           doc.pages.length,

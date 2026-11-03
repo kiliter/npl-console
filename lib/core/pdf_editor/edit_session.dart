@@ -53,7 +53,11 @@ class EditDocument {
     if (cached != null) return Future.value(cached);
     return _pendingThumbnails.putIfAbsent(page, () {
       final revision = bytes;
-      final future = engine.thumbnail(revision, page);
+      final future = PdfDiagnostics.trace(
+        '缩略图排队及渲染',
+        () => engine.thumbnail(revision, page),
+        data: {'页码': page + 1, '文档': identityHashCode(revision)},
+      );
       future.then<void>(
         (png) {
           if (identical(bytes, revision)) {
@@ -100,11 +104,19 @@ class EditDocument {
     }
     return _pendingPages.putIfAbsent(index, () {
       final revision = bytes;
+      PdfDiagnostics.record(
+        '页面预览排队',
+        data: {'页码': index + 1, '文档': identityHashCode(revision)},
+      );
       final task = _renderQueue.then((_) async {
         if (isNeeded != null && !isNeeded()) {
           throw const FormatException('页面已离开显示区域');
         }
-        final result = await engine.inspect(revision, index);
+        final result = await PdfDiagnostics.trace(
+          '页面预览',
+          () => engine.inspect(revision, index),
+          data: {'页码': index + 1, '文档': identityHashCode(revision)},
+        );
         if (identical(bytes, revision)) {
           _pages[index] = result;
           while (_pages.length > 5 ||

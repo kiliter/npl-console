@@ -45,3 +45,9 @@ iOS 提供真机 arm64 未签名 Release IPA，需有效 Apple 开发者证书�
 发布 APK、DMG、PKG、Windows ZIP、未签名 IPA 五份安装包。不发布 Debug、模拟器包或 AAB。
 
 全量测试在 macOS 正式构建后执行，以确保 PDFium 原生库可用。附件仅在 GitHub runner 汇集上传，临时 Actions artifact 保留 1 天；不下载到维护者电脑，不生成额外哈希文件。Release 附件正常保留。
+
+## Windows 单端发布
+
+仅发布 Windows 专项包时，提交版本号和 `docs/releases/版本标签.md` 后，手动触发 `windows-release.yml`，传入相同版本标签。不要在本地推送该标签，否则会启动四端工作流。
+
+该流程构建 Windows 正式包，执行大于 1MB 的多页 PDF 与运行日志回归，签名打包后使用工作流令牌创建标签和 Release；不启动其他平台，也不替换全平台 Latest。通过该 Release 的 Windows ZIP 链接安装。

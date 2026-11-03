@@ -1,0 +1,90 @@
+name: Windows 单端发布
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 与当前代码版本一致的发布标签，例如 v1.6.2
+        required: true
+        type: string
+permissions:
+  contents: write
+concurrency:
+  group: windows-release-${{ inputs.tag }}
+  cancel-in-progress: false
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      TAG: "${{ inputs.tag }}"
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+    - name: 校验发布版本
+      shell: pwsh
+      run: |-
+        if ($env:TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw '版本标签格式错误' }
+        $line = Select-String -Path pubspec.yaml -Pattern '^version: ([0-9]+\.[0-9]+\.[0-9]+)'
+        $version = $line.Matches[0].Groups[1].Value
+        if ($env:TAG -ne "v$version") { throw '版本标签与代码不一致' }
+        "VERSION=$version" >> $env:GITHUB_ENV
+    - name: 安装固定 Flutter
+      shell: bash
+      run: |-
+        git clone --depth 1 --branch 3.44.7 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+        echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+    - name: 构建正式版本
+      shell: pwsh
+      run: |-
+        flutter config --enable-windows-desktop
+        flutter pub get
+        flutter build windows --release -t lib/main.dart --build-name "$env:VERSION" --build-number "$env:GITHUB_RUN_NUMBER"
+        if ($LASTEXITCODE -ne 0) { throw "Windows Release 构建失败" }
+    - name: Windows 大文件多页及运行日志回归
+      shell: pwsh
+      run: |-
+        flutter analyze --no-pub
+        if ($LASTEXITCODE -ne 0) { throw '静态检查失败' }
+        flutter test --no-pub test/pdf_memory_document_test.dart test/runtime_log_test.dart test/request_log_store_test.dart
+        if ($LASTEXITCODE -ne 0) { throw 'Windows 专项回归失败' }
+    - name: 签名并打包
+      shell: pwsh
+      run: |-
+        # 自签名只证明本次构建完整性，不是微软信任的发行者证书。
+        $bundle = 'build/windows/x64/runner/Release'
+        $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=NPL Console Release' -CertStoreLocation 'Cert:\CurrentUser\My' -HashAlgorithm SHA256 -KeyAlgorithm RSA -KeyLength 3072 -NotAfter (Get-Date).AddYears(3)
+        $tool = Get-ChildItem 'C:/Program Files (x86)/Windows Kits/10/bin/*/x64/signtool.exe' | Sort-Object FullName -Descending | Select-Object -First 1
+        if (-not $tool) { throw '未找到 Windows SDK signtool' }
+        & $tool.FullName sign /fd SHA256 /sha1 $cert.Thumbprint "$bundle/npl_maintenance.exe"
+        if ($LASTEXITCODE -ne 0) { throw 'Windows 代码签名失败' }
+        Export-Certificate -Cert $cert -FilePath "$bundle/NPL-Console-Publisher.cer" | Out-Null
+        $signature = Get-AuthenticodeSignature "$bundle/npl_maintenance.exe"
+        if (-not $signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint -ne $cert.Thumbprint) { throw '签名证书不匹配' }
+        @"
+        无纸化维护中心 Windows 正式版
+        完整解压后启动 npl_maintenance.exe，不要只复制 exe。
+        本包使用构建机生成的自签名证书，Windows 不会默认信任，可能出现 SmartScreen 提示。
+        不需要把随附证书安装到系统信任根；证书仅供核对签名。
+        构建版本：Release x64；源码提交：$env:GITHUB_SHA
+        "@ | Set-Content "$bundle/使用说明.txt" -Encoding utf8
+        New-Item -ItemType Directory -Force dist | Out-Null
+        Compress-Archive -Path "$bundle/*" -DestinationPath "dist/NPL-Console-$env:TAG-windows-x64-selfsigned.zip"
+    - name: 上传正式包
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: release-windows
+        path: dist/*
+        if-no-files-found: error
+        retention-days: 1
+    - name: 发布 Windows 专项安装包
+      shell: pwsh
+      env:
+        GH_TOKEN: "${{ github.token }}"
+        GH_REPO: kiliter/npl-console
+      run: |-
+        # 使用 GITHUB_TOKEN 创建标签，不触发四端 tag-push 工作流。
+        # 不替换全平台 Latest，避免其他平台收到没有对应安装包的更新提示。
+        $package = Get-ChildItem 'dist/*.zip' | Select-Object -ExpandProperty FullName
+        gh release create $env:TAG --target $env:GITHUB_SHA --title "$env:TAG · Windows 专项修复" --notes-file "docs/releases/$env:TAG.md" --latest=false $package
+        if ($LASTEXITCODE -ne 0) { throw 'Windows 发布失败' }

@@ -8,10 +8,20 @@ class RequestLogStore {
   final Future<Directory> Function() directoryProvider;
   Future<void> _pending = Future.value();
   File? _file;
+  final String folderName, filePrefix;
+  final int? maxBytes;
+  final int retainedParts;
+  final List<File> _parts = [];
+  int _bytes = 0;
   String? error;
 
-  RequestLogStore({Future<Directory> Function()? directoryProvider})
-    : directoryProvider = directoryProvider ?? getApplicationSupportDirectory;
+  RequestLogStore({
+    Future<Directory> Function()? directoryProvider,
+    this.folderName = 'request-logs',
+    this.filePrefix = 'requests',
+    this.maxBytes,
+    this.retainedParts = 5,
+  }) : directoryProvider = directoryProvider ?? getApplicationSupportDirectory;
 
   String? get path => _file?.path;
 
@@ -19,12 +29,18 @@ class RequestLogStore {
   Future<void> _open() async {
     if (_file != null) return;
     final root = await directoryProvider();
-    final directory = Directory('${root.path}/request-logs');
+    final directory = Directory('${root.path}/$folderName');
     await directory.create(recursive: true);
     final stamp = DateTime.now().toUtc().microsecondsSinceEpoch;
-    final file = File('${directory.path}/requests-$stamp-$pid.jsonl');
+    final file = File('${directory.path}/$filePrefix-$stamp-$pid.jsonl');
     await file.writeAsString('', flush: true);
     _file = file;
+    _bytes = 0;
+    _parts.add(file);
+    while (_parts.length > retainedParts) {
+      final old = _parts.removeAt(0);
+      if (await old.exists()) await old.delete();
+    }
   }
 
   /// 写入失败只记录异常类型，不干扰业务请求；后续追加会再次尝试。
@@ -32,8 +48,10 @@ class RequestLogStore {
     final line = '${jsonEncode(record)}\n';
     _pending = _pending.then((_) async {
       try {
+        if (maxBytes != null && _bytes >= maxBytes!) _file = null;
         await _open();
         await _file!.writeAsString(line, mode: FileMode.append, flush: true);
+        _bytes += utf8.encode(line).length;
         error = null;
       } catch (exception) {
         error = '接口日志写入失败（${exception.runtimeType}）';

@@ -1,5 +1,6 @@
 import 'dart:async';
 import '../core/pdf_diagnostics.dart';
+import '../core/pdf_memory_document.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:pdfrx/pdfrx.dart';
@@ -233,10 +234,11 @@ class _PdfReaderState extends State<PdfReader> {
                     ),
                   ),
                 Expanded(
-                  child: PdfViewer.data(
-                    widget.bytes,
-                    sourceName:
-                        '${widget.name}-${identityHashCode(widget.bytes)}',
+                  child: PdfViewer(
+                    memoryPdfReference(
+                      widget.bytes,
+                      'preview-${identityHashCode(widget.bytes)}',
+                    ),
                     controller: controller,
                     initialPageNumber: widget.initialPage,
                     params: PdfViewerParams(

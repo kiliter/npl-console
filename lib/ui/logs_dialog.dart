@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../core/maintenance_controller.dart';
+import '../core/runtime_log.dart';
 
 const ink = Color(0xff1b2b42);
 
@@ -66,6 +67,21 @@ class LogsDialogState extends State<LogsDialog> {
                   widget.controller.logStore.error ??
                       '日志文件：${widget.controller.logStore.path ?? '首次请求后创建'}',
                   style: const TextStyle(fontSize: 11),
+                ),
+              ),
+              ListenableBuilder(
+                listenable: RuntimeLog.instance,
+                builder: (context, _) => Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 18,
+                    vertical: 4,
+                  ),
+                  child: SelectableText(
+                    RuntimeLog.instance.store.error != null
+                        ? '程序运行日志写入失败：${RuntimeLog.instance.store.error}'
+                        : '程序运行日志：${RuntimeLog.instance.store.path ?? '尚未创建'}',
+                    style: const TextStyle(fontSize: 11),
+                  ),
                 ),
               ),
               if (MediaQuery.sizeOf(context).shortestSide < 600)

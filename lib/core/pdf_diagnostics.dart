@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'request_log_store.dart';
+import 'runtime_log.dart';
 
 /// 与接口记录共用文件；不接收单据号、正文、地址或认证参数。
 class PdfDiagnostics {
@@ -13,6 +14,12 @@ class PdfDiagnostics {
     String? id,
     Map<String, Object?> data = const {},
   }) {
+    unawaited(
+      RuntimeLog.instance.write(
+        event,
+        data: {'类型': 'PDF诊断', '操作': id, ...data},
+      ),
+    );
     unawaited(
       store.append({
         '时间': DateTime.now().toIso8601String(),
@@ -41,12 +48,16 @@ class PdfDiagnostics {
   }
 
   /// 超时仅记日志，不中断原生任务，避免任务仍在执行时释放文档。
-  static Future<T> trace<T>(String stage, Future<T> Function() action) async {
+  static Future<T> trace<T>(
+    String stage,
+    Future<T> Function() action, {
+    Map<String, Object?> data = const {},
+  }) async {
     final id = nextId();
     final watch = Stopwatch()..start();
-    record('$stage：开始', id: id);
+    record('$stage：开始', id: id, data: data);
     final timer = Timer(const Duration(seconds: 20), () {
-      record('$stage：等待超过20秒', id: id);
+      record('$stage：等待超过20秒', id: id, data: data);
     });
     try {
       final result = await action();

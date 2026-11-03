@@ -1,3 +1,7 @@
+import 'dart:async';
+import 'dart:ui';
+import 'package:package_info_plus/package_info_plus.dart';
+import 'core/runtime_log.dart';
 import 'package:flutter/material.dart';
 import 'core/pdf_diagnostics.dart';
 import 'core/maintenance_controller.dart';
@@ -9,13 +13,48 @@ import 'ui/update_dialog.dart';
 
 /// 原生入口；网络由 Dart HTTP 执行，不嵌入网页代理。
 void main() {
-  WidgetsFlutterBinding.ensureInitialized();
-  final controller = MaintenanceController();
-  PdfDiagnostics.store = controller.logStore;
-  PdfDiagnostics.environment();
-  runApp(MaintenanceApp(controller: controller));
-  // 从 macOS 沙盒版升级时先搬回旧偏好，再恢复业务设置。
-  migrateSandboxPreferences().then((_) => controller.restore());
+  final log = RuntimeLog.instance;
+  runZonedGuarded(
+    () async {
+      WidgetsFlutterBinding.ensureInitialized();
+      final previousFlutter = FlutterError.onError;
+      FlutterError.onError = (details) {
+        log.failure(
+          'Flutter框架异常',
+          details.exception,
+          details.stack ?? StackTrace.current,
+        );
+        previousFlutter?.call(details);
+      };
+      PlatformDispatcher.instance.onError = (error, stack) {
+        log.failure('未处理平台异常', error, stack);
+        return true;
+      };
+      await log.write('程序启动');
+      final controller = MaintenanceController();
+      PdfDiagnostics.store = controller.logStore;
+      PdfDiagnostics.environment();
+      runApp(MaintenanceApp(controller: controller));
+      unawaited(
+        PackageInfo.fromPlatform().then(
+          (info) => log.write(
+            '程序版本',
+            data: {'版本': info.version, '构建号': info.buildNumber},
+          ),
+        ),
+      );
+      // 从 macOS 沙盒版升级时先搬回旧偏好，再恢复业务设置。
+      await migrateSandboxPreferences();
+      await controller.restore();
+    },
+    (error, stack) => log.failure('未处理异步异常', error, stack),
+    zoneSpecification: ZoneSpecification(
+      print: (self, parent, zone, message) {
+        unawaited(log.write('控制台', message: message));
+        parent.print(zone, message);
+      },
+    ),
+  );
 }
 
 class MaintenanceApp extends StatefulWidget {
@@ -30,13 +69,26 @@ class MaintenanceApp extends StatefulWidget {
   State<MaintenanceApp> createState() => _MaintenanceAppState();
 }
 
-class _MaintenanceAppState extends State<MaintenanceApp> {
+class _MaintenanceAppState extends State<MaintenanceApp>
+    with WidgetsBindingObserver {
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    unawaited(RuntimeLog.instance.write('应用生命周期', data: {'状态': state.name}));
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
   /// 全局 Navigator key：启动自动检查更新时需要在 MaterialApp 之下弹窗。
   final _navigatorKey = GlobalKey<NavigatorState>();
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     // 首帧渲染后静默检查新版本，仅发现更新时打扰用户。
     WidgetsBinding.instance.addPostFrameCallback((_) => _autoCheckUpdate());
   }
