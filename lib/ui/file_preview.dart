@@ -206,7 +206,19 @@ class _FilePreviewState extends State<FilePreview> {
     return MessageExplorer(
       key: ValueKey(previewRevision),
       session: session,
-      text: utf8.decode(widget.bytes, allowMalformed: true),
+      text: _text(),
     );
+  }
+
+  /// 报文文本按字节对象缓存：父级频繁重建时不再重复 UTF-8 解码整份报文，
+  /// 且保持同一个 String 实例，下游比较可走 identical 快速路径。
+  Uint8List? _textBytes;
+  String _textValue = '';
+  String _text() {
+    if (!identical(_textBytes, widget.bytes)) {
+      _textBytes = widget.bytes;
+      _textValue = utf8.decode(widget.bytes, allowMalformed: true);
+    }
+    return _textValue;
   }
 }

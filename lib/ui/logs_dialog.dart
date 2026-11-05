@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../core/maintenance_controller.dart';
 import '../core/runtime_log.dart';
+import 'large_text_view.dart';
+import 'listenable_selector.dart';
 
 const ink = Color(0xff1b2b42);
 
@@ -21,8 +23,22 @@ class LogsDialogState extends State<LogsDialog> {
     child: SizedBox(
       width: 1150,
       height: 680,
-      child: AnimatedBuilder(
-        animation: widget.controller,
+      child: ListenableSelector(
+        listenable: widget.controller,
+        // 仅记录列表、最新/选中记录的状态或日志路径变化时重建；
+        // 详情文本可能达数 MB，不随无关通知重复拼接与排版。
+        selector: () {
+          final c = widget.controller, logs = c.logs;
+          final first = logs.isEmpty ? null : logs.first;
+          return (
+            logs.length,
+            first,
+            first?.state,
+            selected?.state,
+            c.logStore.path,
+            c.logStore.error,
+          );
+        },
         builder: (context, _) {
           final logs = widget.controller.logs;
           final entry = selected ?? (logs.isEmpty ? null : logs.first);
@@ -112,12 +128,10 @@ class LogsDialogState extends State<LogsDialog> {
                         ),
                       ),
                       Expanded(
-                        child: SingleChildScrollView(
+                        child: LargeTextView(
+                          text: entry?.detail ?? '尚无接口调用。',
                           padding: const EdgeInsets.all(16),
-                          child: SelectableText(
-                            entry?.detail ?? '尚无接口调用。',
-                            style: const TextStyle(fontSize: 12, height: 1.7),
-                          ),
+                          style: const TextStyle(fontSize: 12, height: 1.7),
                         ),
                       ),
                     ],
@@ -164,16 +178,13 @@ class LogsDialogState extends State<LogsDialog> {
                         child: ColoredBox(
                           color: const Color(0xfff8faff),
                           child: SizedBox.expand(
-                            child: SingleChildScrollView(
-                              padding: const EdgeInsets.all(22),
-                              child: SelectableText(
-                                entry?.detail ?? '尚无接口调用。',
-                                style: const TextStyle(
-                                  fontFamily: 'Menlo',
-                                  fontSize: 12,
-                                  height: 1.8,
-                                  color: ink,
-                                ),
+                            child: LargeTextView(
+                              text: entry?.detail ?? '尚无接口调用。',
+                              style: const TextStyle(
+                                fontFamily: 'Menlo',
+                                fontSize: 12,
+                                height: 1.8,
+                                color: ink,
                               ),
                             ),
                           ),

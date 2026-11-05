@@ -1,11 +1,17 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart' show compute;
 import 'package:xml/xml.dart';
 
 /// 可独立解析的字段节点。保留原始值，专注时无需向后台重新请求。
 class MessageNode {
   final String name, path;
   final Object? value;
-  const MessageNode(this.name, this.path, this.value);
+  MessageNode(this.name, this.path, this.value);
+
+  /// 子节点按需生成并缓存。字段树每次重建都会读取 [isBranch]、[summary]、
+  /// [children]，不缓存时大数组每一行都要重新分配全部子节点。
+  late final List<MessageNode> children = _children();
+
   String get source {
     final data = value;
     if (data is XmlNode) return data.toXmlString();
@@ -13,7 +19,7 @@ class MessageNode {
     return const JsonEncoder.withIndent('  ').convert(data);
   }
 
-  List<MessageNode> get children {
+  List<MessageNode> _children() {
     final data = value;
     if (data is Map) {
       return data.entries
@@ -72,7 +78,16 @@ class MessageNode {
     return const [];
   }
 
-  bool get isBranch => children.isNotEmpty;
+  /// 判断是否可展开时不生成子节点：Map/List 只看长度，XML 只看有无属性或子内容。
+  bool get isBranch {
+    final data = value;
+    if (data is Map) return data.isNotEmpty;
+    if (data is List) return data.isNotEmpty;
+    if (data is XmlDocument) return true;
+    if (data is XmlElement) return children.isNotEmpty;
+    return false;
+  }
+
   String get summary {
     final data = value;
     if (data is Map) return '{ ${data.length} 个字段 }';
@@ -97,12 +112,42 @@ class MessageNode {
 }
 
 class MessageDocument {
-  final String format, source;
+  final String format;
   final MessageNode root;
   final String? error;
-  const MessageDocument(this.format, this.source, this.root, [this.error]);
+  final String? _source;
+  MessageDocument(this.format, String source, this.root, [this.error])
+    : _source = source;
+
+  /// 已解析的 Map/List/XML 节点再专注时，原文按需序列化：
+  /// 结构视图不需要原文，只有切到原文或复制时才生成，避免专注大对象时卡顿。
+  MessageDocument._lazy(this.format, this.root) : error = null, _source = null;
+
+  late final String source = _source ?? root.source;
   bool get structured => format != 'text';
 }
+
+/// 文本报文超过该长度（UTF-16 码元，约 128K 字符）时改在后台 isolate 解析。
+/// 小报文同步解析，界面无需等待一帧；大报文的 JSON/XML 解析、内嵌 JSON 探测
+/// 及畸形 JSON 修复都是 O(n) 的字符串扫描，放在主线程会阻塞界面。
+const backgroundParseThreshold = 128 * 1024;
+
+/// 是否应在后台解析。只有字符串输入才值得：Map/List/XML 节点已是结构化数据，
+/// 跨 isolate 传递需要整棵复制，反而比直接构建文档更慢。
+bool shouldParseInBackground(
+  Object? input, {
+  String mode = 'auto',
+  int threshold = backgroundParseThreshold,
+}) => mode != 'text' && input is String && input.length >= threshold;
+
+/// 在后台 isolate 中执行 [parseMessage]，结果通过 Isolate.exit 零拷贝传回。
+Future<MessageDocument> parseMessageInBackground(
+  Object? input, {
+  String mode = 'auto',
+}) => compute(_parseEntry, (input: input, mode: mode));
+
+MessageDocument _parseEntry(({Object? input, String mode}) request) =>
+    parseMessage(request.input, mode: request.mode);
 
 /// 从 start 处的 { 或 [ 开始按 JSON 词法做括号配平（尊重字符串与转义），
 /// 返回配对闭合符的下标；配平失败返回 -1。
@@ -187,18 +232,18 @@ String repairAcceptContentJson(String input) {
 
 /// 自动识别 JSON/XML；显式选择格式时返回解析错误，原文始终可查看。
 MessageDocument parseMessage(Object? input, {String mode = 'auto'}) {
+  Object? data = input;
+  if (data is XmlNode && mode != 'json' && mode != 'text') {
+    return MessageDocument._lazy('xml', MessageNode('根节点', '', data));
+  }
+  if ((data is Map || data is List) && mode != 'xml' && mode != 'text') {
+    return MessageDocument._lazy('json', MessageNode('根节点', '', data));
+  }
   final raw = MessageNode('根节点', '', input).source;
   if (mode == 'text') {
     return MessageDocument('text', raw, MessageNode('文本', '', raw));
   }
-  Object? data = input;
   String? autoError;
-  if (data is XmlNode && mode != 'json') {
-    return MessageDocument('xml', raw, MessageNode('根节点', '', data));
-  }
-  if ((data is Map || data is List) && mode != 'xml') {
-    return MessageDocument('json', raw, MessageNode('根节点', '', data));
-  }
   if (mode != 'xml') {
     try {
       data = jsonDecode(raw);

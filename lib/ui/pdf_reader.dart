@@ -56,9 +56,91 @@ class _PdfReaderState extends State<PdfReader> {
       PdfDiagnostics.record('预览切换', id: diagnosticId);
       document = null;
       page = widget.initialPage;
+      _viewer = null;
       startDiagnostic();
     }
   }
+
+  /// 同一份文档复用同一个 PdfViewer 实例：翻页、缩放、状态条或接口记录更新
+  /// 引起的重建会被 Flutter 直接跳过，pdfrx 不必比较参数或重新布局页面。
+  Widget? _viewer;
+
+  Widget _buildViewer() => PdfViewer(
+    memoryPdfReference(
+      widget.bytes,
+      'preview-${identityHashCode(widget.bytes)}',
+    ),
+    controller: controller,
+    initialPageNumber: widget.initialPage,
+    params: PdfViewerParams(
+      errorBannerBuilder: (context, error, stack, ref) {
+        loadingTimer?.cancel();
+        if (!errorLogged) {
+          errorLogged = true;
+          PdfDiagnostics.record(
+            '预览失败',
+            id: diagnosticId,
+            data: {
+              '异常类型': error.runtimeType.toString(),
+              '调用栈': stack?.toString(),
+            },
+          );
+        }
+        return const Center(child: Text('PDF 加载失败，请查看接口记录中的日志文件'));
+      },
+      margin: 18,
+      backgroundColor: const Color(0xffe9eef5),
+      pageDropShadow: const BoxShadow(
+        color: Color(0x26324761),
+        blurRadius: 10,
+        offset: Offset(0, 4),
+      ),
+      // 右侧可拖拽滚动条：长文档可直接拖到末尾，并显示当前页码。
+      viewerOverlayBuilder: (context, size, handleLinkTap) => [
+        PdfViewerScrollThumb(
+          controller: controller,
+          thumbSize: const Size(22, 48),
+          margin: 4,
+          thumbBuilder: (context, thumbSize, pageNumber, _) => Container(
+            decoration: BoxDecoration(
+              color: const Color(0xff3b5878),
+              borderRadius: BorderRadius.circular(11),
+            ),
+            alignment: Alignment.center,
+            child: pageNumber == null
+                ? null
+                : Text(
+                    '$pageNumber',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+          ),
+        ),
+      ],
+      onViewerReady: (doc, ctrl) {
+        if (!mounted) return;
+        loadingTimer?.cancel();
+        PdfDiagnostics.record(
+          '预览就绪',
+          id: diagnosticId,
+          data: {'页数': doc.pages.length},
+        );
+        setState(() => document = doc);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && controller.isReady) applyFit(fit);
+        });
+      },
+      onPageChanged: (value) {
+        if (value != null && mounted) {
+          setState(() => page = value);
+          widget.onPageChanged?.call(value);
+        }
+      },
+    ),
+  );
 
   @override
   void dispose() {
@@ -233,87 +315,7 @@ class _PdfReaderState extends State<PdfReader> {
                       ),
                     ),
                   ),
-                Expanded(
-                  child: PdfViewer(
-                    memoryPdfReference(
-                      widget.bytes,
-                      'preview-${identityHashCode(widget.bytes)}',
-                    ),
-                    controller: controller,
-                    initialPageNumber: widget.initialPage,
-                    params: PdfViewerParams(
-                      errorBannerBuilder: (context, error, stack, ref) {
-                        loadingTimer?.cancel();
-                        if (!errorLogged) {
-                          errorLogged = true;
-                          PdfDiagnostics.record(
-                            '预览失败',
-                            id: diagnosticId,
-                            data: {
-                              '异常类型': error.runtimeType.toString(),
-                              '调用栈': stack?.toString(),
-                            },
-                          );
-                        }
-                        return const Center(
-                          child: Text('PDF 加载失败，请查看接口记录中的日志文件'),
-                        );
-                      },
-                      margin: 18,
-                      backgroundColor: const Color(0xffe9eef5),
-                      pageDropShadow: const BoxShadow(
-                        color: Color(0x26324761),
-                        blurRadius: 10,
-                        offset: Offset(0, 4),
-                      ),
-                      // 右侧可拖拽滚动条：长文档可直接拖到末尾，并显示当前页码。
-                      viewerOverlayBuilder: (context, size, handleLinkTap) => [
-                        PdfViewerScrollThumb(
-                          controller: controller,
-                          thumbSize: const Size(22, 48),
-                          margin: 4,
-                          thumbBuilder: (context, thumbSize, pageNumber, _) =>
-                              Container(
-                                decoration: BoxDecoration(
-                                  color: const Color(0xff3b5878),
-                                  borderRadius: BorderRadius.circular(11),
-                                ),
-                                alignment: Alignment.center,
-                                child: pageNumber == null
-                                    ? null
-                                    : Text(
-                                        '$pageNumber',
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                              ),
-                        ),
-                      ],
-                      onViewerReady: (doc, ctrl) {
-                        if (!mounted) return;
-                        loadingTimer?.cancel();
-                        PdfDiagnostics.record(
-                          '预览就绪',
-                          id: diagnosticId,
-                          data: {'页数': doc.pages.length},
-                        );
-                        setState(() => document = doc);
-                        WidgetsBinding.instance.addPostFrameCallback((_) {
-                          if (mounted && controller.isReady) applyFit(fit);
-                        });
-                      },
-                      onPageChanged: (value) {
-                        if (value != null && mounted) {
-                          setState(() => page = value);
-                          widget.onPageChanged?.call(value);
-                        }
-                      },
-                    ),
-                  ),
-                ),
+                Expanded(child: _viewer ??= _buildViewer()),
               ],
             ),
           ),

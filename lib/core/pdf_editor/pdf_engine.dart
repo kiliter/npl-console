@@ -1,11 +1,14 @@
+import 'dart:async';
+import 'dart:collection';
 import 'dart:ffi' as ffi;
+import 'dart:io' show Platform;
 import '../pdf_diagnostics.dart';
 import '../pdf_memory_document.dart';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui';
 import 'package:ffi/ffi.dart';
-import 'package:flutter/foundation.dart' show compute;
+import 'package:flutter/foundation.dart' show compute, visibleForTesting;
 import 'package:image/image.dart' as img;
 import 'package:pdfrx/pdfrx.dart';
 import 'package:pdfium_dart/pdfium_dart.dart' as native;
@@ -71,11 +74,98 @@ class PdfImagePlacement {
   });
 }
 
+/// 页面渲染被调度到执行前已不再需要（如快速滚动时页面离开显示区域）。
+class PdfRenderSkipped implements Exception {
+  const PdfRenderSkipped();
+  @override
+  String toString() => '页面已离开显示区域';
+}
+
+/// PDFium 调度器。
+///
+/// PDFium 不是线程安全的，pdfrx 把全部调用集中在同一个后台 isolate 执行，
+/// 多开 isolate 同时调用同一个动态库会破坏其全局状态，所以 PDFium 渲染只能串行。
+/// 调度器保证同一时刻只有一个渲染任务占用文档，并让页面预览优先于缩略图：
+/// 打开单据时缩略图条一次请求十几张，不能排在用户正在看的页面前面。
+class _PdfiumScheduler {
+  final _high = Queue<Future<void> Function()>(),
+      _low = Queue<Future<void> Function()>();
+  bool _running = false;
+
+  Future<T> run<T>(Future<T> Function() task, {bool low = false}) {
+    final completer = Completer<T>();
+    (low ? _low : _high).add(() async {
+      try {
+        completer.complete(await task());
+      } catch (error, stack) {
+        completer.completeError(error, stack);
+      }
+    });
+    _drain();
+    return completer.future;
+  }
+
+  Future<void> _drain() async {
+    if (_running) return;
+    _running = true;
+    try {
+      while (_high.isNotEmpty || _low.isNotEmpty) {
+        await (_high.isNotEmpty ? _high.removeFirst() : _low.removeFirst())();
+      }
+    } finally {
+      _running = false;
+    }
+  }
+}
+
+/// PNG 编码等纯 CPU 工作的并行池：在 PDFium 渲染下一页的同时，
+/// 用多个 isolate（多核）并行编码已渲染的页面。并发数按 CPU 核数限制，
+/// 每个任务持有一页原始像素（约 6 MB），不无限制地同时展开。
+class _EncodePool {
+  _EncodePool(this.size);
+  final int size;
+  int _active = 0;
+  final _waiting = Queue<Completer<void>>();
+
+  Future<T> run<T>(Future<T> Function() task) async {
+    if (_active >= size) {
+      final slot = Completer<void>();
+      _waiting.add(slot);
+      await slot.future;
+    } else {
+      _active++;
+    }
+    try {
+      return await task();
+    } finally {
+      if (_waiting.isNotEmpty) {
+        _waiting.removeFirst().complete();
+      } else {
+        _active--;
+      }
+    }
+  }
+}
+
 /// PDFium calls run in pdfrx's worker isolate (including font callbacks). Every write uses a fresh
 /// document: failures cannot partially mutate the user's current revision.
 class PdfEditEngine {
-  // 左右文档、页面和缩略图共用队列，限制完整文档副本及位图同时驻留。
-  static Future<void> _documentQueue = Future.value();
+  // 左右文档、页面和缩略图共用调度器，限制完整文档副本及位图同时驻留。
+  static final _scheduler = _PdfiumScheduler();
+  static final _encoders = _EncodePool(
+    (Platform.numberOfProcessors - 1).clamp(1, 4),
+  );
+
+  /// 只读渲染复用已打开的文档。pdfrx 打开一份 5 MB 单据约 50～100 ms，
+  /// 原先每渲染一页、每张缩略图都重新打开一次。按字节对象身份缓存最近的版本
+  /// （修改总是生成新的字节数组），淘汰与释放都在调度器任务内进行，不会与渲染并发。
+  final _documents = LinkedHashMap<Uint8List, Future<PdfDocument>>.identity();
+  static const maxOpenDocuments = 4;
+
+  /// 实际打开文档的次数，仅供测试验证缓存命中。
+  @visibleForTesting
+  int debugOpenCount = 0;
+
   Future<T> _native<T>(
     Uint8List bytes,
     T Function(native.PDFium, native.FPDF_DOCUMENT) task,
@@ -92,29 +182,60 @@ class PdfEditEngine {
     return result.value as T;
   }
 
-  Future<T> _open<T>(Uint8List bytes, Future<T> Function(PdfDocument) task) {
-    final result = _documentQueue.then((_) async {
-      final doc = await openMemoryPdf(bytes, 'edit-${identityHashCode(bytes)}');
-      try {
-        return await task(doc);
-      } finally {
-        await PdfDiagnostics.trace('PDF文档释放', () => doc.dispose());
-      }
-    });
-    _documentQueue = result.then<void>(
+  Future<PdfDocument> _document(Uint8List bytes) {
+    final cached = _documents.remove(bytes);
+    if (cached != null) return _documents[bytes] = cached;
+    debugOpenCount++;
+    final opening = openMemoryPdf(bytes, 'edit-${identityHashCode(bytes)}');
+    _documents[bytes] = opening;
+    opening.then<void>(
       (_) {},
-      onError: (Object _, StackTrace _) {},
+      onError: (Object _, StackTrace _) {
+        if (identical(_documents[bytes], opening)) _documents.remove(bytes);
+      },
     );
-    return result;
+    while (_documents.length > maxOpenDocuments) {
+      _close(_documents.remove(_documents.keys.first)!);
+    }
+    return opening;
   }
 
-  Future<PdfPageSnapshot> inspect(Uint8List bytes, int pageIndex) async {
-    final objects = await PdfDiagnostics.trace(
+  static void _close(Future<PdfDocument> document) => document.then(
+    (doc) => PdfDiagnostics.trace('PDF文档释放', () => doc.dispose()),
+    onError: (Object _, StackTrace _) {},
+  );
+
+  /// 释放缓存的已打开文档（关闭编辑页、切换环境时调用）。
+  Future<void> releaseDocuments() => _scheduler.run(() async {
+    final all = _documents.values.toList();
+    _documents.clear();
+    all.forEach(_close);
+  });
+
+  Future<T> _open<T>(
+    Uint8List bytes,
+    Future<T> Function(PdfDocument) task, {
+    bool low = false,
+    bool Function()? isNeeded,
+  }) => _scheduler.run(() async {
+    // 排队期间页面可能已滚出显示区域，轮到时再判断，避免渲染无人查看的页面。
+    if (isNeeded != null && !isNeeded()) throw const PdfRenderSkipped();
+    return task(await _document(bytes));
+  }, low: low);
+
+  /// 渲染一页预览。PDFium 只做对象解析与位图渲染；PNG 编码在释放调度器后
+  /// 进入并行池，PDFium 可以立即开始渲染下一页。
+  Future<PdfPageSnapshot> inspect(
+    Uint8List bytes,
+    int pageIndex, {
+    bool Function()? isNeeded,
+  }) async {
+    final objectsTask = PdfDiagnostics.trace(
       '页面对象解析',
       () => _inspectObjects(bytes, pageIndex),
       data: {'页码': pageIndex + 1, '文档': identityHashCode(bytes)},
     );
-    return _open(bytes, (doc) async {
+    final renderTask = _open(bytes, isNeeded: isNeeded, (doc) async {
       if (pageIndex < 0 || pageIndex >= doc.pages.length) {
         throw const FormatException('页码超出范围');
       }
@@ -129,19 +250,13 @@ class PdfEditEngine {
       );
       if (image == null) throw const FormatException('无法渲染 PDF');
       try {
-        return PdfPageSnapshot(
-          await PdfDiagnostics.trace(
-            '页面PNG编码',
-            () => compute(_encodePreview, (
-              pixels: image.pixels,
-              width: image.width,
-              height: image.height,
-            )),
-            data: {'页码': pageIndex + 1, '文档': identityHashCode(bytes)},
-          ),
-          Size(p.width, p.height),
-          objects,
-          doc.pages.length,
+        return (
+          // 原生像素随 dispose 释放，复制到 Dart 堆后即可交还调度器。
+          pixels: Uint8List.fromList(image.pixels),
+          width: image.width,
+          height: image.height,
+          size: Size(p.width, p.height),
+          pageCount: doc.pages.length,
           pageSizes: [
             for (final page in doc.pages) Size(page.width, page.height),
           ],
@@ -150,7 +265,43 @@ class PdfEditEngine {
         image.dispose();
       }
     });
+    // 两者同时发出：对象解析与渲染在 pdfrx 后台依次执行，中间不留往返空档。
+    // 先挂上空监听，任何一方先失败都不会变成未捕获异常；下面的 await 仍会收到错误。
+    objectsTask.ignore();
+    renderTask.ignore();
+    final objects = await objectsTask;
+    final page = await renderTask;
+    final png = await PdfDiagnostics.trace(
+      '页面PNG编码',
+      () => _encode(page.pixels, page.width, page.height),
+      data: {'页码': pageIndex + 1, '文档': identityHashCode(bytes)},
+    );
+    return PdfPageSnapshot(
+      png,
+      page.size,
+      objects,
+      page.pageCount,
+      pageSizes: page.pageSizes,
+    );
   }
+
+  /// 预览图快速编码：压缩等级 1、不做行过滤。实测 1071×1515 的扫描单据页
+  /// 编码由约 90 ms 降到约 20 ms，体积与默认参数相当；预览图不写入 PDF，画质无损。
+  static Future<Uint8List> _encode(
+    Uint8List pixels,
+    int width,
+    int height, {
+    int? stride,
+    int format = 4,
+  }) => _encoders.run(
+    () => compute(_encodePreview, (
+      pixels: pixels,
+      width: width,
+      height: height,
+      stride: stride ?? width * 4,
+      format: format,
+    )),
+  );
 
   Future<List<PdfEditObject>> _inspectObjects(Uint8List bytes, int pageIndex) {
     return _native(bytes, (a, pdf) {
@@ -624,36 +775,53 @@ class PdfEditEngine {
     Uint8List bytes,
     int index,
     List<PdfEditObject> hidden,
-  ) => _native(bytes, (a, pdf) {
-    final page = a.FPDF_LoadPage(pdf, index);
-    if (page == ffi.nullptr) throw const FormatException('无法读取预览页');
-    try {
-      _removeImages(a, page, hidden);
-      final pw = a.FPDF_GetPageWidthF(page), ph = a.FPDF_GetPageHeightF(page);
-      final scale = math.min(1500 / pw, 1500 / ph);
-      final w = (pw * scale).ceil(), h = (ph * scale).ceil();
-      final bitmap = a.FPDFBitmap_Create(w, h, 1);
-      if (bitmap == ffi.nullptr) throw const FormatException('预览内存不足');
-      try {
-        a.FPDFBitmap_FillRect(bitmap, 0, 0, w, h, 0xffffffff);
-        a.FPDF_RenderPageBitmap(bitmap, page, 0, 0, w, h, 0, 1);
-        final stride = a.FPDFBitmap_GetStride(bitmap);
-        return _png(
-          a.FPDFBitmap_GetBuffer(
-            bitmap,
-          ).cast<ffi.Uint8>().asTypedList(stride * h),
-          w,
-          h,
-          stride,
-          a.FPDFBitmap_GetFormat(bitmap),
-        );
-      } finally {
-        a.FPDFBitmap_Destroy(bitmap);
-      }
-    } finally {
-      a.FPDF_ClosePage(page);
-    }
-  });
+  ) async {
+    final raw = await _renderBackground(bytes, index, hidden);
+    return _encode(
+      raw.pixels,
+      raw.width,
+      raw.height,
+      stride: raw.stride,
+      format: raw.format,
+    );
+  }
+
+  Future<({Uint8List pixels, int width, int height, int stride, int format})>
+  _renderBackground(Uint8List bytes, int index, List<PdfEditObject> hidden) =>
+      _native(bytes, (a, pdf) {
+        final page = a.FPDF_LoadPage(pdf, index);
+        if (page == ffi.nullptr) throw const FormatException('无法读取预览页');
+        try {
+          _removeImages(a, page, hidden);
+          final pw = a.FPDF_GetPageWidthF(page),
+              ph = a.FPDF_GetPageHeightF(page);
+          final scale = math.min(1500 / pw, 1500 / ph);
+          final w = (pw * scale).ceil(), h = (ph * scale).ceil();
+          final bitmap = a.FPDFBitmap_Create(w, h, 1);
+          if (bitmap == ffi.nullptr) throw const FormatException('预览内存不足');
+          try {
+            a.FPDFBitmap_FillRect(bitmap, 0, 0, w, h, 0xffffffff);
+            a.FPDF_RenderPageBitmap(bitmap, page, 0, 0, w, h, 0, 1);
+            final stride = a.FPDFBitmap_GetStride(bitmap);
+            // 只返回像素，PNG 编码移出 PDFium 后台，避免占住唯一的渲染线程。
+            return (
+              pixels: Uint8List.fromList(
+                a.FPDFBitmap_GetBuffer(
+                  bitmap,
+                ).cast<ffi.Uint8>().asTypedList(stride * h),
+              ),
+              width: w,
+              height: h,
+              stride: stride,
+              format: a.FPDFBitmap_GetFormat(bitmap),
+            );
+          } finally {
+            a.FPDFBitmap_Destroy(bitmap);
+          }
+        } finally {
+          a.FPDF_ClosePage(page);
+        }
+      });
 
   static void _removeImages(
     native.PDFium a,
@@ -786,24 +954,27 @@ class PdfEditEngine {
     }
   });
 
-  Future<Uint8List> thumbnail(Uint8List bytes, int index) =>
-      _open(bytes, (doc) async {
-        final page = doc.pages[index];
-        final image = await page.render(
-          fullWidth: 100,
-          fullHeight: 100 * page.height / page.width,
+  /// 缩略图低优先级排队，页面预览随时插到前面。
+  Future<Uint8List> thumbnail(Uint8List bytes, int index) async {
+    final raw = await _open(bytes, low: true, (doc) async {
+      final page = doc.pages[index];
+      final image = await page.render(
+        fullWidth: 100,
+        fullHeight: 100 * page.height / page.width,
+      );
+      if (image == null) throw const FormatException('缩略图加载失败');
+      try {
+        return (
+          pixels: Uint8List.fromList(image.pixels),
+          width: image.width,
+          height: image.height,
         );
-        if (image == null) throw const FormatException('缩略图加载失败');
-        try {
-          return await compute(_encodePreview, (
-            pixels: image.pixels,
-            width: image.width,
-            height: image.height,
-          ));
-        } finally {
-          image.dispose();
-        }
-      });
+      } finally {
+        image.dispose();
+      }
+    });
+    return _encode(raw.pixels, raw.width, raw.height);
+  }
 
   Future<Uint8List> duplicatePage(Uint8List bytes, int index) =>
       _native(bytes, (a, pdf) {
@@ -846,7 +1017,14 @@ class PdfEditEngine {
     }
   }
 
-  static Uint8List _png(Uint8List bytes, int w, int h, int stride, int format) {
+  static Uint8List _png(
+    Uint8List bytes,
+    int w,
+    int h,
+    int stride,
+    int format, {
+    bool fast = false,
+  }) {
     final channels = format == 1
         ? 1
         : format == 2
@@ -870,7 +1048,11 @@ class PdfEditEngine {
         pixel.a = 255;
       }
     }
-    return Uint8List.fromList(img.encodePng(image));
+    return Uint8List.fromList(
+      fast
+          ? img.encodePng(image, level: 1, filter: img.PngFilter.none)
+          : img.encodePng(image),
+    );
   }
 
   static void _setImage(
@@ -1112,5 +1294,13 @@ Uint8List _saveNative(native.PDFium a, native.FPDF_DOCUMENT pdf) {
   }
 }
 
-Uint8List _encodePreview(({Uint8List pixels, int width, int height}) data) =>
-    PdfEditEngine._png(data.pixels, data.width, data.height, data.width * 4, 4);
+Uint8List _encodePreview(
+  ({Uint8List pixels, int width, int height, int stride, int format}) data,
+) => PdfEditEngine._png(
+  data.pixels,
+  data.width,
+  data.height,
+  data.stride,
+  data.format,
+  fast: true,
+);

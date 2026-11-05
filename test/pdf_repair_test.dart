@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:image/image.dart' as img;
 import 'dart:ui' as ui;
 import 'package:flutter/rendering.dart';
 import 'package:npl_maintenance/ui/pdf_editor/repair_connections.dart';
@@ -12,6 +13,8 @@ import 'package:npl_maintenance/core/pdf_editor/edit_session.dart';
 import 'package:npl_maintenance/core/pdf_editor/pdf_engine.dart';
 import 'package:npl_maintenance/ui/pdf_editor/editor_canvas.dart';
 import 'package:npl_maintenance/ui/pdf_editor/repair_preview.dart';
+import 'package:npl_maintenance/ui/pdf_editor/pdf_editor_screen.dart';
+import 'package:npl_maintenance/core/maintenance_controller.dart';
 
 final _png = base64Decode(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg==',
@@ -35,7 +38,11 @@ class _Engine extends PdfEditEngine {
   @override
   Future<Uint8List> thumbnail(Uint8List bytes, int index) async => _png;
   @override
-  Future<PdfPageSnapshot> inspect(Uint8List bytes, int pageIndex) async {
+  Future<PdfPageSnapshot> inspect(
+    Uint8List bytes,
+    int pageIndex, {
+    bool Function()? isNeeded,
+  }) async {
     calls.update(pageIndex, (n) => n + 1, ifAbsent: () => 1);
     return PdfPageSnapshot(_png, const Size(400, 400), _objects, 10);
   }
@@ -59,6 +66,17 @@ class _Engine extends PdfEditEngine {
     bases.add(bytes);
     return pending?.future ?? Uint8List.fromList([2]);
   }
+}
+
+class _ValidImageEngine extends _Engine {
+  final Uint8List png;
+  _ValidImageEngine(this.png);
+  @override
+  Future<Uint8List> extractImage(
+    Uint8List bytes,
+    int index,
+    PdfEditObject selected,
+  ) async => png;
 }
 
 void main() {
@@ -102,7 +120,7 @@ void main() {
     ]);
     await session.target!.preview(engine, 1);
     expect(engine.calls[1], 1);
-    for (var i = 2; i < 9; i++) {
+    for (var i = 2; i < EditDocument.maxCachedPages + 4; i++) {
       await session.target!.preview(engine, i);
     }
     await session.target!.preview(engine, 1);
@@ -259,7 +277,10 @@ void main() {
           find
               .descendant(
                 of: find.byKey(ValueKey(side)),
-                matching: find.byType(Scrollable),
+                matching: find.byWidgetPredicate(
+                  (w) =>
+                      w is Scrollable && w.axisDirection == AxisDirection.down,
+                ),
               )
               .first,
         )
@@ -609,5 +630,543 @@ void main() {
     selection.dispose();
     session.dispose();
     connections.dispose();
+  });
+
+  test('修改状态按字节对象身份缓存，替换字节后重新比较', () {
+    final doc = EditDocument(
+      'NEW',
+      Uint8List.fromList([1, 2]),
+      PdfPageSnapshot(_png, const Size(400, 400), _objects, 1),
+    );
+    expect(doc.edited, isFalse);
+    expect(doc.dirty, isFalse);
+    doc.commit(Uint8List.fromList([1, 3]));
+    expect(doc.edited, isTrue);
+    expect(doc.dirty, isTrue);
+    doc.saved = Uint8List.fromList([1, 3]);
+    expect(doc.dirty, isFalse);
+    expect(doc.edited, isTrue);
+    doc.bytes = Uint8List.fromList([1, 2]);
+    expect(doc.edited, isFalse);
+    expect(doc.dirty, isTrue);
+  });
+
+  testWidgets('连线几何只在滚动、布局或数据变化时测量，视口内无连线时暂停动画', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final connections = RepairConnections();
+    final image = SharedPdfImage(
+      _png,
+      'OLD',
+      1,
+      1,
+      bounds: const Rect.fromLTWH(.1, .1, .2, .2),
+      sourceSize: const Size(400, 400),
+    );
+    // leftTop 模拟旧单据页在视口内的位置（滚动），header 模拟顶栏高度变化。
+    final leftTop = ValueNotifier<double>(0), header = ValueNotifier<double>(0);
+    Widget registered(void Function(BuildContext) register, Widget child) =>
+        Builder(
+          builder: (context) {
+            register(context);
+            return child;
+          },
+        );
+    Widget page(bool source) => registered(
+      (context) => connections.pages[(source, 0)] = context,
+      const SizedBox(width: 300, height: 300),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: RepairConnectionOverlay(
+          connections: connections,
+          enabled: true,
+          child: Column(
+            children: [
+              ValueListenableBuilder<double>(
+                valueListenable: header,
+                builder: (_, height, _) => SizedBox(height: height),
+              ),
+              Expanded(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    SizedBox(
+                      width: 400,
+                      child: registered(
+                        (context) => connections.viewports[true] = context,
+                        ValueListenableBuilder<double>(
+                          valueListenable: leftTop,
+                          builder: (_, top, _) => Stack(
+                            children: [
+                              Positioned(left: 0, top: top, child: page(true)),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    SizedBox(
+                      width: 200,
+                      child: Center(
+                        child: RepairSharedAnchor(
+                          connections: connections,
+                          image: image,
+                          child: const SizedBox(width: 80, height: 60),
+                        ),
+                      ),
+                    ),
+                    SizedBox(
+                      width: 400,
+                      child: registered(
+                        (context) => connections.viewports[false] = context,
+                        Align(alignment: Alignment.topLeft, child: page(false)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    connections.setImages([image]);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 16));
+    expect(tester.binding.transientCallbackCount, greaterThan(0));
+
+    // 动画逐帧推进时复用缓存几何，不再逐帧测量页面与卡片。
+    final measured = connections.debugMeasureCount;
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    expect(connections.debugMeasureCount, measured);
+
+    // 滚动等通知使几何失效，下一帧重新测量一次。
+    connections.refresh();
+    await tester.pump(const Duration(milliseconds: 16));
+    expect(connections.debugMeasureCount, measured + 1);
+
+    // 顶栏变高使整个工作区下移，即使没有通知也会被视口位置校验发现。
+    header.value = 20;
+    await tester.pump(const Duration(milliseconds: 16));
+    expect(connections.debugMeasureCount, measured + 2);
+
+    // 旧单据页滚出视口：没有可见连线，动画暂停，不再逐帧重绘。
+    leftTop.value = 900;
+    connections.refresh();
+    await tester.pump(const Duration(milliseconds: 16));
+    await tester.pump(const Duration(milliseconds: 16));
+    expect(tester.binding.transientCallbackCount, 0);
+    expect(tester.binding.hasScheduledFrame, isFalse);
+
+    // 滚回视口后自动恢复流光动画。
+    leftTop.value = 0;
+    connections.refresh();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 16));
+    expect(tester.binding.transientCallbackCount, greaterThan(0));
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const SizedBox());
+    leftTop.dispose();
+    header.dispose();
+    connections.dispose();
+  });
+
+  testWidgets('页面滚出再滚回时复用解码图与背景，会话忙碌切换不刷新预览', (tester) async {
+    // 共用夹具 PNG 无法被引擎解码；这里需要真实解码成功才能验证缓存命中。
+    final engine = _ValidImageEngine(
+      Uint8List.fromList(img.encodePng(img.Image(width: 8, height: 8))),
+    );
+    final session = PdfEditSession(engine: engine);
+    await session.load('NEW', Uint8List.fromList([1]));
+    // 右侧原图移入暂存再放回本页：本页既有共享图层，也需要遮掉原图的背景。
+    await session.stashTargetImage(0, object: _objects.first);
+    session.placeStagedImage(session.materials.single, 0, const Offset(.5, .5));
+    expect(session.error, isNull);
+    expect(session.imagesForPage(0), hasLength(1));
+    final doc = session.previewTarget!;
+    Widget preview() => MaterialApp(
+      home: Scaffold(
+        body: SizedBox(
+          width: 400,
+          height: 400,
+          child: RepairPreview(
+            session: session,
+            document: doc,
+            page: 0,
+            snapshot: doc.snapshot,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpWidget(preview());
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
+    await tester.pumpAndSettle();
+    final cache = RepairPreviewCache.of(session);
+    expect(cache.decodeCount, 1);
+    expect(cache.backgroundCount, 1);
+    expect(find.textContaining('失败'), findsNothing);
+
+    // busy、同步状态等与共享图片无关的通知不触发本页重新计算。
+    final revision = session.materialsRevision;
+    session.notifyListeners();
+    await tester.pump();
+    expect(session.materialsRevision, revision);
+    expect(cache.backgroundCount, 1);
+
+    // 模拟滚出视口后再滚回：页面组件重建，直接命中缓存。
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpWidget(preview());
+    await tester.pumpAndSettle();
+    expect(cache.decodeCount, 1);
+    expect(cache.backgroundCount, 1);
+
+    // 移除共享图后背景与图层随之更新。
+    await session.removeMaterial(session.materials.single);
+    await tester.pumpAndSettle();
+    expect(session.materialsRevision, greaterThan(revision));
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    RepairPreviewCache.release(session);
+    session.dispose();
+  });
+
+  testWidgets('单据修复页局部刷新：共享区与状态变化不重建左右画布', (tester) async {
+    tester.view.physicalSize = const Size(1440, 1024);
+    tester.view.devicePixelRatio = 1;
+    tester.platformDispatcher.accessibilityFeaturesTestValue =
+        const FakeAccessibilityFeatures(disableAnimations: true);
+    addTearDown(tester.platformDispatcher.clearAccessibilityFeaturesTestValue);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final engine = _Engine(), controller = MaintenanceController();
+    final session = PdfEditSession(engine: engine);
+    await session.load(
+      'NEW',
+      Uint8List.fromList([1]),
+      sourceNo: 'OLD',
+      sourceBytes: Uint8List.fromList([0]),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: PdfEditorScreen(controller: controller, session: session),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    Widget canvas(String key) => tester.widget(find.byKey(ValueKey(key)));
+    final source = canvas('source-canvas'), target = canvas('target-canvas');
+    expect(find.text('共享区 0'), findsOneWidget);
+
+    // 共享图片变化：共享区与状态行更新，画布组件实例保持不变。
+    await tester.runAsync(
+      () => session.collectSelected([
+        (page: 0, object: _objects.first, size: const Size(400, 400)),
+      ]),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('共享区 1'), findsOneWidget);
+    expect(find.textContaining('画布预览 · 点击应用后生成单据'), findsOneWidget);
+
+    // 加入共享区期间 busy 切换过，画布按可操作状态重建；之后的纯状态通知不再重建。
+    final idleSource = canvas('source-canvas'),
+        idleTarget = canvas('target-canvas');
+    expect(identical(idleSource, source), isFalse);
+    session.previewChanged();
+    session.notifyListeners();
+    await tester.pump();
+    expect(identical(canvas('source-canvas'), idleSource), isTrue);
+    expect(identical(canvas('target-canvas'), idleTarget), isTrue);
+    expect(identical(idleTarget, target), isFalse);
+    expect(find.widgetWithText(FilledButton, '应用'), findsOneWidget);
+    expect(
+      tester
+          .widget<FilledButton>(find.widgetWithText(FilledButton, '应用'))
+          .onPressed,
+      isNotNull,
+    );
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    session.dispose();
+    controller.dispose();
+  });
+
+  testWidgets('宽屏三栏可拖动调整宽度，双击恢复，画布不重建且保持阅读页', (tester) async {
+    tester.view.physicalSize = const Size(1440, 1024);
+    tester.view.devicePixelRatio = 1;
+    tester.platformDispatcher.accessibilityFeaturesTestValue =
+        const FakeAccessibilityFeatures(disableAnimations: true);
+    addTearDown(tester.platformDispatcher.clearAccessibilityFeaturesTestValue);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final engine = _Engine(), controller = MaintenanceController();
+    final session = PdfEditSession(engine: engine);
+    await session.load(
+      'NEW',
+      Uint8List.fromList([1]),
+      sourceNo: 'OLD',
+      sourceBytes: Uint8List.fromList([0]),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: PdfEditorScreen(controller: controller, session: session),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final source = find.byKey(const ValueKey('source-canvas')),
+        target = find.byKey(const ValueKey('target-canvas')),
+        shared = find.byKey(const ValueKey('repair-shared-column'));
+    double width(Finder f) => tester.getSize(f).width;
+    final left0 = width(source), right0 = width(target), mid0 = width(shared);
+    expect(left0, closeTo(right0, 1));
+    expect(mid0, 184);
+
+    // 先把右栏滚到第 3 页，验证拖动后仍停在同一页。
+    final scrollable = tester.state<ScrollableState>(
+      find
+          .descendant(
+            of: target,
+            matching: find.byWidgetPredicate(
+              (w) => w is Scrollable && w.axisDirection == AxisDirection.down,
+            ),
+          )
+          .first,
+    );
+    final pageHeight = right0 - 24 + 44;
+    scrollable.position.jumpTo(pageHeight * 2.25);
+    await tester.pumpAndSettle();
+    final canvasWidget = tester.widget(target);
+
+    // 左分隔条向左拖：左栏变窄，右栏等量变宽，共享区不变。
+    await tester.drag(
+      find.byKey(const ValueKey('repair-split-left')),
+      const Offset(-200, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(width(source), closeTo(left0 - 200, 2));
+    expect(width(target), closeTo(right0 + 200, 2));
+    expect(width(shared), mid0);
+    // 拖动只重新布局，新单据画布仍是同一个组件实例。
+    expect(identical(tester.widget(target), canvasWidget), isTrue);
+    final newHeight = width(target) - 24 + 44;
+    expect(scrollable.position.pixels / newHeight, closeTo(2.25, .02));
+
+    // 右分隔条向右拖：共享区变宽，右栏变窄，左栏不变。
+    final left1 = width(source);
+    await tester.drag(
+      find.byKey(const ValueKey('repair-split-right')),
+      const Offset(80, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(width(shared), closeTo(mid0 + 80, 2));
+    expect(width(source), closeTo(left1, 2));
+
+    // 拖过头时保留画布最小宽度。
+    await tester.drag(
+      find.byKey(const ValueKey('repair-split-left')),
+      const Offset(-2000, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(width(source), closeTo(260, 1));
+
+    // 双击分隔条恢复默认布局。
+    await tester.tap(find.byKey(const ValueKey('repair-split-left')));
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.tap(find.byKey(const ValueKey('repair-split-left')));
+    await tester.pumpAndSettle();
+    expect(width(source), closeTo(left0, 1));
+    expect(width(shared), mid0);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    session.dispose();
+    controller.dispose();
+  });
+
+  testWidgets('两栏同步缩放，放大后左右滚动同步，Ctrl/⌘ + 滚轮缩放不滚动页面', (tester) async {
+    tester.view.physicalSize = const Size(1440, 1024);
+    tester.view.devicePixelRatio = 1;
+    tester.platformDispatcher.accessibilityFeaturesTestValue =
+        const FakeAccessibilityFeatures(disableAnimations: true);
+    addTearDown(tester.platformDispatcher.clearAccessibilityFeaturesTestValue);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final engine = _Engine(), controller = MaintenanceController();
+    final session = PdfEditSession(engine: engine);
+    await session.load(
+      'NEW',
+      Uint8List.fromList([1]),
+      sourceNo: 'OLD',
+      sourceBytes: Uint8List.fromList([0]),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: PdfEditorScreen(controller: controller, session: session),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    ScrollPosition scrollOf(String side, AxisDirection direction) => tester
+        .state<ScrollableState>(
+          find
+              .descendant(
+                of: find.byKey(ValueKey(side)),
+                matching: find.byWidgetPredicate(
+                  (w) => w is Scrollable && w.axisDirection == direction,
+                ),
+              )
+              .first,
+        )
+        .position;
+    ScrollPosition horizontal(String side) =>
+        scrollOf(side, AxisDirection.right);
+    ScrollPosition vertical(String side) => scrollOf(side, AxisDirection.down);
+    final paper = find.descendant(
+      of: find.byKey(const ValueKey('target-canvas')),
+      matching: find.byType(RepairPreview),
+    );
+    final fitWidth = tester.getSize(paper.first).width;
+    expect(horizontal('target-canvas').maxScrollExtent, 0);
+    expect(find.text('适应宽度'), findsOneWidget);
+
+    // 先停在第 2 页中部，缩放后仍停在这里。
+    final pageHeight = fitWidth + 44;
+    vertical('target-canvas').jumpTo(pageHeight * 1.5);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('repair-zoom-in')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('repair-zoom-in')));
+    await tester.pumpAndSettle();
+    expect(find.text('150%'), findsOneWidget);
+    expect(tester.getSize(paper.first).width, closeTo(fitWidth * 1.5, 1));
+    for (final side in ['source-canvas', 'target-canvas']) {
+      expect(horizontal(side).maxScrollExtent, greaterThan(100));
+      expect(vertical(side).pixels / (fitWidth * 1.5 + 44), closeTo(1.5, .03));
+    }
+
+    // 右栏横向滚到最右，左栏跟到最右；滚到中间，左栏按比例对齐。
+    final right = horizontal('target-canvas'),
+        left = horizontal('source-canvas');
+    right.jumpTo(right.maxScrollExtent);
+    await tester.pump();
+    expect(left.pixels, closeTo(left.maxScrollExtent, .5));
+    right.jumpTo(right.maxScrollExtent / 2);
+    await tester.pump();
+    expect(left.pixels / left.maxScrollExtent, closeTo(.5, .01));
+    // 左栏反向带动右栏，且不互相回弹。
+    left.jumpTo(0);
+    await tester.pump();
+    expect(right.pixels, 0);
+
+    // Ctrl + 滚轮放大：只缩放，不上下滚动页面。
+    final before = vertical('target-canvas').pixels;
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    tester.binding.handlePointerEvent(
+      PointerScrollEvent(
+        position: tester.getCenter(paper.first),
+        scrollDelta: const Offset(0, -40),
+      ),
+    );
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pumpAndSettle();
+    expect(find.text('165%'), findsOneWidget);
+    expect(vertical('target-canvas').pixels, closeTo(before * 1.1, 60));
+
+    // 点击倍数恢复适应宽度，横向滚动随之消失。
+    await tester.tap(find.byKey(const ValueKey('repair-zoom-reset')));
+    await tester.pumpAndSettle();
+    expect(find.text('适应宽度'), findsOneWidget);
+    expect(horizontal('target-canvas').maxScrollExtent, 0);
+    expect(tester.getSize(paper.first).width, closeTo(fitWidth, 1));
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    session.dispose();
+    controller.dispose();
+  });
+
+  testWidgets('缩略图条跟随当前页，左右两侧缩略图条同步滚动', (tester) async {
+    // 10 页缩略图（500 宽）超出单栏宽度，缩略图条可滚动。
+    tester.view.physicalSize = const Size(1000, 900);
+    tester.view.devicePixelRatio = 1;
+    tester.platformDispatcher.accessibilityFeaturesTestValue =
+        const FakeAccessibilityFeatures(disableAnimations: true);
+    addTearDown(tester.platformDispatcher.clearAccessibilityFeaturesTestValue);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final engine = _Engine(), controller = MaintenanceController();
+    final session = PdfEditSession(engine: engine);
+    await session.load(
+      'NEW',
+      Uint8List.fromList([1]),
+      sourceNo: 'OLD',
+      sourceBytes: Uint8List.fromList([0]),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: PdfEditorScreen(controller: controller, session: session),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    ScrollPosition strip(String side) => tester
+        .state<ScrollableState>(
+          find
+              .descendant(
+                of: find.byKey(ValueKey(side)),
+                matching: find.byType(Scrollable),
+              )
+              .first,
+        )
+        .position;
+    final left = strip('source-thumbnails'), right = strip('target-thumbnails');
+    expect(right.maxScrollExtent, greaterThan(0));
+    expect(left.pixels, 0);
+    expect(right.pixels, 0);
+
+    // 手动滚动任一侧缩略图条，另一侧滚到相同位置。
+    right.jumpTo(right.maxScrollExtent);
+    await tester.pump();
+    expect(left.pixels, right.pixels);
+    left.jumpTo(30);
+    await tester.pump();
+    expect(right.pixels, 30);
+    left.jumpTo(0);
+    await tester.pump();
+
+    // 页面滚到最后一页：当前页缩略图滚入可见范围，两侧保持一致。
+    final pages = tester.state<ScrollableState>(
+      find
+          .descendant(
+            of: find.byKey(const ValueKey('target-canvas')),
+            matching: find.byWidgetPredicate(
+              (w) => w is Scrollable && w.axisDirection == AxisDirection.down,
+            ),
+          )
+          .first,
+    );
+    pages.position.jumpTo(pages.position.maxScrollExtent);
+    await tester.pumpAndSettle();
+    final last =
+        (session.previewTarget!.snapshot.pageCount - 1) * repairThumbnailExtent;
+    expect(right.pixels, greaterThan(0));
+    expect(last, greaterThanOrEqualTo(right.pixels));
+    expect(
+      last + repairThumbnailExtent,
+      lessThanOrEqualTo(right.pixels + right.viewportDimension + .5),
+    );
+    expect(left.pixels, right.pixels);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    session.dispose();
+    controller.dispose();
   });
 }

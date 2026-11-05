@@ -1,13 +1,17 @@
 import 'repair_connections.dart';
 import '../../core/pdf_diagnostics.dart';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:typed_data';
+import 'package:flutter/gestures.dart' show DragStartBehavior;
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show compute;
 import 'package:file_picker/file_picker.dart';
 import '../../core/maintenance_controller.dart';
 import '../../core/pdf_editor/edit_session.dart';
+import '../listenable_selector.dart';
 import 'editor_canvas.dart';
+import 'repair_preview.dart';
 
 class PdfEditorScreen extends StatefulWidget {
   final MaintenanceController controller;
@@ -23,9 +27,22 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
   final connections = RepairConnections();
   final selection = ValueNotifier<Map<String, RepairSelection>>({});
   final scrollLink = ValueNotifier<RepairScrollPosition?>(null);
+
+  /// 两栏共享的缩放倍数与横向滚动位置，对照同一片区域。
+  final zoom = ValueNotifier<double>(RepairZoom.min);
+  final horizontalLink = ValueNotifier<RepairHorizontalPosition?>(null);
+  final thumbnailLink = ValueNotifier<RepairThumbnailPosition?>(null);
+
+  /// 宽屏三栏布局：左栏占（总宽 − 共享区 − 分隔条）的比例与共享区宽度。
+  /// 拖动分隔条只改这里，画布实例不重建，只重新布局。
+  final split = ValueNotifier<({double left, double shared})>(defaultSplit);
+  static const defaultSplit = (left: .5, shared: 184.0);
+  static const minCanvasWidth = 260.0, minShared = 140.0, maxShared = 420.0;
+  static const handleWidth = 8.0;
   bool loading = false, saving = false, showSource = true;
   String? loadError;
   late String connection = jsonEncode(widget.controller.settings.toJson());
+  late Object _settings = widget.controller.settings;
   int loadRevision = 0;
   bool get busy => session.busy || loading || saving;
 
@@ -34,18 +51,88 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
     super.initState();
     oldNo.text = session.source?.caseNo ?? '';
     newNo.text = session.target?.caseNo ?? '';
+    _materialsRevision = session.materialsRevision;
     connections.setImages(session.materials);
     session.addListener(update);
     widget.controller.addListener(connectionChanged);
   }
 
+  int _materialsRevision = 0;
+
+  /// 会话通知不再整页 setState：顶栏、状态行、共享区与左右画布各自用
+  /// [watch] 选择依赖字段局部重建。这里只在共享图片变化时同步连线数据。
   void update() {
+    if (session.materialsRevision == _materialsRevision) return;
+    _materialsRevision = session.materialsRevision;
     connections.setImages(session.materials);
-    if (mounted) setState(() {});
+  }
+
+  /// 局部监听会话：仅 [select] 结果变化时重建 [build]。
+  Widget watch<T>(T Function() select, Widget Function() build) =>
+      ListenableSelector<T>(
+        listenable: session,
+        selector: select,
+        builder: (context, _) => build(),
+      );
+
+  /// 缩放控件：两栏共用一个倍数；点中间的倍数恢复适应宽度。
+  Widget zoomControls() => ValueListenableBuilder<double>(
+    valueListenable: zoom,
+    builder: (context, value, _) => Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        IconButton(
+          key: const ValueKey('repair-zoom-out'),
+          tooltip: '缩小',
+          iconSize: 18,
+          onPressed: value <= RepairZoom.min
+              ? null
+              : () => zoom.value = RepairZoom.down(value),
+          icon: const Icon(Icons.zoom_out),
+        ),
+        Tooltip(
+          message: 'Ctrl/⌘ + 滚轮或触控板捏合缩放，点击恢复适应宽度',
+          child: TextButton(
+            key: const ValueKey('repair-zoom-reset'),
+            onPressed: value <= RepairZoom.min
+                ? null
+                : () => zoom.value = RepairZoom.min,
+            child: SizedBox(
+              width: 58,
+              child: Text(
+                RepairZoom.label(value),
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 12),
+              ),
+            ),
+          ),
+        ),
+        IconButton(
+          key: const ValueKey('repair-zoom-in'),
+          tooltip: '放大',
+          iconSize: 18,
+          onPressed: value >= RepairZoom.max
+              ? null
+              : () => zoom.value = RepairZoom.up(value),
+          icon: const Icon(Icons.zoom_in),
+        ),
+      ],
+    ),
+  );
+
+  /// 画布依赖：文档对象及其字节、当前快照、镜像页，以及是否可操作。
+  /// 共享图片变化由画布内的 RepairPreview 自行监听，不在此重建整块画布。
+  Object? _canvasKey(bool source) {
+    final doc = source ? session.source : session.previewTarget;
+    return (doc, doc?.bytes, doc?.snapshot, doc?.mirrorPages.length, busy);
   }
 
   void connectionChanged() {
-    final next = jsonEncode(widget.controller.settings.toJson());
+    // 控制器任意变化都会回调；设置对象未替换时直接返回，免去每次序列化比较。
+    final settings = widget.controller.settings;
+    if (identical(settings, _settings)) return;
+    _settings = settings;
+    final next = jsonEncode(settings.toJson());
     if (next == connection) return;
     connection = next;
     loadRevision++;
@@ -60,11 +147,16 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
     loadRevision++;
     widget.controller.removeListener(connectionChanged);
     session.removeListener(update);
+    RepairPreviewCache.release(session);
     if (widget.session == null) session.dispose();
     oldNo.dispose();
     newNo.dispose();
     selection.dispose();
     scrollLink.dispose();
+    split.dispose();
+    zoom.dispose();
+    horizontalLink.dispose();
+    thumbnailLink.dispose();
     connections.dispose();
     super.dispose();
   }
@@ -297,7 +389,10 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
     }
   }
 
-  Widget document(bool source) {
+  Widget document(bool source) =>
+      watch(() => _canvasKey(source), () => _document(source));
+
+  Widget _document(bool source) {
     final doc = source ? session.source : session.previewTarget;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -327,6 +422,9 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
                   onCopyPage: (page) => copyPage(source, page),
                   onMirrorPage: source ? mirrorPage : null,
                   scrollLink: scrollLink,
+                  zoom: zoom,
+                  horizontalLink: horizontalLink,
+                  thumbnailLink: thumbnailLink,
                   connections: connections,
                   session: source ? null : session,
                 ),
@@ -335,7 +433,13 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
     );
   }
 
-  Widget shared(bool compact) => NotificationListener<ScrollNotification>(
+  /// 共享区只依赖共享图片、可操作状态与新单据页数（判断“缺页”）。
+  Widget shared(bool compact) => watch(
+    () => (session.materialsRevision, busy, session.target?.snapshot.pageCount),
+    () => _shared(compact),
+  );
+
+  Widget _shared(bool compact) => NotificationListener<ScrollNotification>(
     onNotification: (_) {
       connections.refresh();
       return false;
@@ -535,154 +639,189 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
               padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
               child: Column(
                 children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: oldNo,
-                          enabled: !busy,
-                          decoration: const InputDecoration(
-                            labelText: '旧单据号',
-                            isDense: true,
+                  watch(
+                    () => busy,
+                    () => Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: oldNo,
+                            enabled: !busy,
+                            decoration: const InputDecoration(
+                              labelText: '旧单据号',
+                              isDense: true,
+                            ),
                           ),
                         ),
-                      ),
-                      const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 8),
-                        child: Icon(Icons.arrow_forward, size: 18),
-                      ),
-                      Expanded(
-                        child: TextField(
-                          controller: newNo,
-                          enabled: !busy,
-                          onSubmitted: (_) => load(),
-                          decoration: const InputDecoration(
-                            labelText: '新单据号',
-                            isDense: true,
+                        const Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 8),
+                          child: Icon(Icons.arrow_forward, size: 18),
+                        ),
+                        Expanded(
+                          child: TextField(
+                            controller: newNo,
+                            enabled: !busy,
+                            onSubmitted: (_) => load(),
+                            decoration: const InputDecoration(
+                              labelText: '新单据号',
+                              isDense: true,
+                            ),
                           ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                   const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 4,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      OutlinedButton(
-                        onPressed: busy ? null : load,
-                        child: Text(loading ? '加载中…' : '加载单据'),
-                      ),
-                      ValueListenableBuilder<Map<String, RepairSelection>>(
-                        valueListenable: selection,
-                        builder: (context, selected, _) => OutlinedButton(
-                          onPressed: busy || selected.isEmpty ? null : collect,
-                          child: Text(
-                            selected.isEmpty
-                                ? '加入共享区'
-                                : '加入共享区（${selected.length}）',
+                  watch(
+                    () => (
+                      busy,
+                      session.target,
+                      session.target?.bytes,
+                      session.target?.saved,
+                      session.needsSync,
+                    ),
+                    () => Wrap(
+                      spacing: 8,
+                      runSpacing: 4,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        OutlinedButton(
+                          onPressed: busy ? null : load,
+                          child: Text(loading ? '加载中…' : '加载单据'),
+                        ),
+                        ValueListenableBuilder<Map<String, RepairSelection>>(
+                          valueListenable: selection,
+                          builder: (context, selected, _) => OutlinedButton(
+                            onPressed: busy || selected.isEmpty
+                                ? null
+                                : collect,
+                            child: Text(
+                              selected.isEmpty
+                                  ? '加入共享区'
+                                  : '加入共享区（${selected.length}）',
+                            ),
                           ),
                         ),
-                      ),
-                      OutlinedButton.icon(
-                        onPressed: busy || session.target == null
-                            ? null
-                            : importImage,
-                        icon: const Icon(
-                          Icons.add_photo_alternate_outlined,
-                          size: 16,
+                        OutlinedButton.icon(
+                          onPressed: busy || session.target == null
+                              ? null
+                              : importImage,
+                          icon: const Icon(
+                            Icons.add_photo_alternate_outlined,
+                            size: 16,
+                          ),
+                          label: const Text('导入本地图片'),
                         ),
-                        label: const Text('导入本地图片'),
-                      ),
-                      FilledButton(
-                        onPressed:
-                            busy || session.target == null || !session.needsSync
-                            ? null
-                            : synchronize,
-                        child: const Text('应用'),
-                      ),
-                      OutlinedButton.icon(
-                        onPressed:
-                            busy ||
-                                session.target?.edited != true ||
-                                session.needsSync
-                            ? null
-                            : save,
-                        icon: const Icon(Icons.save_alt, size: 16),
-                        label: Text(saving ? '保存中…' : '保存到本地'),
-                      ),
-                    ],
+                        FilledButton(
+                          onPressed:
+                              busy ||
+                                  session.target == null ||
+                                  !session.needsSync
+                              ? null
+                              : synchronize,
+                          child: const Text('应用'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed:
+                              busy ||
+                                  session.target?.edited != true ||
+                                  session.needsSync
+                              ? null
+                              : save,
+                          icon: const Icon(Icons.save_alt, size: 16),
+                          label: Text(saving ? '保存中…' : '保存到本地'),
+                        ),
+                        zoomControls(),
+                      ],
+                    ),
                   ),
                   const SizedBox(height: 5),
                   const Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      '按住 Ctrl / ⌘ 多选加入共享区；按当前页序实时预览。右键可镜像、复制或删除图片，点击应用后保存。',
+                      '按住 Ctrl / ⌘ 多选加入共享区；按当前页序实时预览。右键可镜像、复制或删除图片，点击应用后保存。Ctrl / ⌘ + 滚轮缩放，两侧同步滚动。',
                       style: TextStyle(fontSize: 12, color: Color(0xff52647c)),
                     ),
                   ),
                 ],
               ),
             ),
-            if (session.source != null &&
-                session.target != null &&
-                session.source!.snapshot.pageCount !=
-                    session.target!.snapshot.pageCount)
-              Container(
-                margin: const EdgeInsets.fromLTRB(12, 0, 12, 6),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 5,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xfffff4df),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.info_outline,
-                      size: 16,
-                      color: Color(0xff9d6b19),
+            watch(
+              () => (
+                session.source?.snapshot.pageCount,
+                session.target?.snapshot.pageCount,
+              ),
+              () =>
+                  session.source == null ||
+                      session.target == null ||
+                      session.source!.snapshot.pageCount ==
+                          session.target!.snapshot.pageCount
+                  ? const SizedBox.shrink()
+                  : Container(
+                      margin: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 5,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xfffff4df),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.info_outline,
+                            size: 16,
+                            color: Color(0xff9d6b19),
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              '页数不一致：旧 ${session.source!.snapshot.pageCount} 页，新 ${session.target!.snapshot.pageCount} 页。可用镜像或复制页面对齐。',
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: Color(0xff8a5c12),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        '页数不一致：旧 ${session.source!.snapshot.pageCount} 页，新 ${session.target!.snapshot.pageCount} 页。可用镜像或复制页面对齐。',
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: Color(0xff8a5c12),
+            ),
+            watch(
+              () => busy,
+              () => busy
+                  ? const LinearProgressIndicator(minHeight: 2)
+                  : const SizedBox.shrink(),
+            ),
+            watch(
+              () => (session.error, session.syncStatus),
+              () =>
+                  loadError == null &&
+                      session.error == null &&
+                      session.syncStatus == null
+                  ? const SizedBox.shrink()
+                  : Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 4,
+                      ),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          loadError ?? session.error ?? session.syncStatus!,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: loadError != null || session.error != null
+                                ? Colors.red.shade700
+                                : const Color(0xff2869e8),
+                          ),
                         ),
                       ),
                     ),
-                  ],
-                ),
-              ),
-            if (busy) const LinearProgressIndicator(minHeight: 2),
-            if (loadError != null ||
-                session.error != null ||
-                session.syncStatus != null)
-              Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 4,
-                ),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    loadError ?? session.error ?? session.syncStatus!,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: loadError != null || session.error != null
-                          ? Colors.red.shade700
-                          : const Color(0xff2869e8),
-                    ),
-                  ),
-                ),
-              ),
+            ),
             if (compact)
               Padding(
                 padding: const EdgeInsets.only(bottom: 6),
@@ -702,19 +841,146 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
                       index: showSource ? 0 : 1,
                       children: [document(true), document(false)],
                     )
-                  : Row(
-                      children: [
-                        Expanded(child: document(true)),
-                        SizedBox(width: 184, child: shared(false)),
-                        Expanded(child: document(false)),
-                      ],
-                    ),
+                  : _splitView(document(true), shared(false), document(false)),
             ),
             if (compact) SizedBox(height: 104, child: shared(true)),
           ],
         ),
       );
     },
+  );
+}
+
+extension on _PdfEditorScreenState {
+  /// 可拖动调整宽度的三栏：旧单据 | 共享区 | 新单据。
+  /// 三栏组件在外部创建一次传入，拖动时 Flutter 复用同一实例，只做布局。
+  Widget _splitView(Widget left, Widget middle, Widget right) => LayoutBuilder(
+    builder: (context, box) => ValueListenableBuilder(
+      valueListenable: split,
+      builder: (context, value, _) {
+        final (:leftWidth, :sharedWidth, :rightWidth) = _widths(
+          box.maxWidth,
+          value,
+        );
+        return Row(
+          children: [
+            SizedBox(width: leftWidth, child: left),
+            _SplitHandle(
+              key: const ValueKey('repair-split-left'),
+              onDrag: (dx) => _dragLeft(box.maxWidth, dx),
+              onReset: () => split.value = _PdfEditorScreenState.defaultSplit,
+            ),
+            SizedBox(
+              key: const ValueKey('repair-shared-column'),
+              width: sharedWidth,
+              child: middle,
+            ),
+            _SplitHandle(
+              key: const ValueKey('repair-split-right'),
+              onDrag: (dx) => _dragShared(box.maxWidth, dx),
+              onReset: () => split.value = _PdfEditorScreenState.defaultSplit,
+            ),
+            SizedBox(width: rightWidth, child: right),
+          ],
+        );
+      },
+    ),
+  );
+
+  /// 按当前总宽计算三栏宽度；窗口缩小时先保证两侧画布的最小宽度。
+  ({double leftWidth, double sharedWidth, double rightWidth}) _widths(
+    double total,
+    ({double left, double shared}) value,
+  ) {
+    const min = _PdfEditorScreenState.minCanvasWidth;
+    final free = math.max(0.0, total - 2 * _PdfEditorScreenState.handleWidth);
+    final shared = value.shared
+        .clamp(
+          _PdfEditorScreenState.minShared,
+          math.max(_PdfEditorScreenState.minShared, free - 2 * min),
+        )
+        .toDouble();
+    final canvases = math.max(0.0, free - shared);
+    final left = canvases < 2 * min
+        ? canvases / 2
+        : (canvases * value.left).clamp(min, canvases - min).toDouble();
+    return (leftWidth: left, sharedWidth: shared, rightWidth: canvases - left);
+  }
+
+  /// 左分隔条：左栏变宽、右栏变窄，共享区宽度不变。
+  void _dragLeft(double total, double dx) {
+    final current = _widths(total, split.value);
+    final canvases = current.leftWidth + current.rightWidth;
+    if (canvases <= 0) return;
+    split.value = (
+      left: ((current.leftWidth + dx) / canvases).clamp(0.0, 1.0),
+      shared: current.sharedWidth,
+    );
+  }
+
+  /// 右分隔条：共享区变宽、右栏变窄，左栏宽度不变。
+  void _dragShared(double total, double dx) {
+    final current = _widths(total, split.value);
+    final shared = (current.sharedWidth + dx)
+        .clamp(
+          _PdfEditorScreenState.minShared,
+          math.min(
+            _PdfEditorScreenState.maxShared,
+            current.sharedWidth +
+                current.rightWidth -
+                _PdfEditorScreenState.minCanvasWidth,
+          ),
+        )
+        .toDouble();
+    final canvases =
+        current.leftWidth + current.rightWidth + current.sharedWidth - shared;
+    if (canvases <= 0) return;
+    split.value = (left: current.leftWidth / canvases, shared: shared);
+  }
+}
+
+/// 栏间分隔条：左右拖动调整宽度，双击恢复默认布局。
+class _SplitHandle extends StatefulWidget {
+  final ValueChanged<double> onDrag;
+  final VoidCallback onReset;
+  const _SplitHandle({super.key, required this.onDrag, required this.onReset});
+  @override
+  State<_SplitHandle> createState() => _SplitHandleState();
+}
+
+class _SplitHandleState extends State<_SplitHandle> {
+  bool active = false;
+  void highlight(bool value) {
+    if (value != active) setState(() => active = value);
+  }
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+    message: '左右拖动调整宽度，双击恢复',
+    waitDuration: const Duration(milliseconds: 600),
+    child: MouseRegion(
+      cursor: SystemMouseCursors.resizeColumn,
+      onEnter: (_) => highlight(true),
+      onExit: (_) => highlight(false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        // 从按下处开始计算位移，越过拖动阈值前的距离不丢失，分隔条紧跟指针。
+        dragStartBehavior: DragStartBehavior.down,
+        onHorizontalDragStart: (_) => highlight(true),
+        onHorizontalDragUpdate: (details) => widget.onDrag(details.delta.dx),
+        onHorizontalDragEnd: (_) => highlight(false),
+        onDoubleTap: widget.onReset,
+        child: SizedBox(
+          width: _PdfEditorScreenState.handleWidth,
+          child: Center(
+            child: Container(
+              width: active ? 3 : 1,
+              color: active ? const Color(0xff2869e8) : const Color(0xffd5dee9),
+            ),
+          ),
+        ),
+      ),
+    ),
   );
 }
 

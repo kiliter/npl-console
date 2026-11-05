@@ -9,6 +9,7 @@ import '../core/maintenance_controller.dart';
 import '../core/secure_links.dart';
 import 'file_preview.dart';
 import 'image_gallery.dart';
+import 'listenable_selector.dart';
 import 'log_files_sheet.dart';
 import 'settings_dialog.dart';
 import 'query_sheet.dart';
@@ -57,12 +58,41 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
   @override
   void initState() {
     super.initState();
+    _rootKey = _rootSelect();
     c.addListener(update);
   }
 
+  /// 整页骨架只依赖选中工单与连接设置；其余区域（状态条、进度、结果列表、
+  /// 资料区、接口记录数）由各自的 ListenableSelector 局部重建，
+  /// 避免每次请求、每张图片加载完成都重建整页（包括后台的单据修复页）。
+  Object? _rootKey;
+  Object? _rootSelect() => (c.work, c.settings);
+
   void update() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    final next = _rootSelect();
+    if (next == _rootKey) return;
+    setState(() => _rootKey = next);
   }
+
+  /// 局部监听：仅 [select] 结果变化时重建 [build]。
+  Widget watch<T>(T Function() select, Widget Function() build) =>
+      ListenableSelector<T>(
+        listenable: c,
+        selector: select,
+        builder: (context, _) => build(),
+      );
+
+  /// 单据修复页实例常驻：整页骨架重建时 Flutter 直接复用，不触发编辑器重建。
+  late final Widget editorScreen = PdfEditorScreen(
+    controller: c,
+    session: editorSession,
+  );
+
+  /// 工单的小写 JSON 文本，用于结果筛选；工单记录查询后不再修改，可安全缓存。
+  static final _searchTexts = Expando<String>('workSearchText');
+  static String _searchText(Record work) =>
+      _searchTexts[work] ??= jsonEncode(work).toLowerCase();
 
   @override
   void dispose() {
@@ -300,20 +330,30 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
                 ),
               // 状态行移动端独立成行；桌面端已并入顶栏，仅保留查询进度条。
               if (mobile && !editorTab) status(),
-              if (!mobile && c.querying)
-                LinearProgressIndicator(
-                  value: c.total == 0 ? null : c.completed / c.total,
-                  minHeight: 3,
+              if (!mobile)
+                watch(
+                  () => (c.querying, c.completed, c.total),
+                  () => c.querying
+                      ? LinearProgressIndicator(
+                          value: c.total == 0 ? null : c.completed / c.total,
+                          minHeight: 3,
+                        )
+                      : const SizedBox.shrink(),
                 ),
               Expanded(
                 child: IndexedStack(
                   index: editorTab ? 1 : 0,
+                  // IndexedStack 会保持隐藏页的动画继续运行（Visibility.maintain），
+                  // 单据修复页的连线流动动画在后台仍会逐帧重绘；隐藏页暂停 Ticker。
                   children: [
-                    mobile ? mobileBody() : desktopBody(),
-                    if (editorOpened)
-                      PdfEditorScreen(controller: c, session: editorSession)
-                    else
-                      const SizedBox(),
+                    TickerMode(
+                      enabled: !editorTab,
+                      child: mobile ? mobileBody() : desktopBody(),
+                    ),
+                    TickerMode(
+                      enabled: editorTab,
+                      child: editorOpened ? editorScreen : const SizedBox(),
+                    ),
                   ],
                 ),
               ),
@@ -447,10 +487,13 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
             const SizedBox(width: 12),
             statusInline(),
           ],
-          IconButton(
-            tooltip: '缓存命中 ${c.cacheHits} 次 · 点击清空',
-            onPressed: c.clearCache,
-            icon: const Icon(Icons.cached, size: 19),
+          watch(
+            () => c.cacheHits,
+            () => IconButton(
+              tooltip: '缓存命中 ${c.cacheHits} 次 · 点击清空',
+              onPressed: c.clearCache,
+              icon: const Icon(Icons.cached, size: 19),
+            ),
           ),
           // 窄桌面收为图标，给日志文件与环境切换入口留出空间。
           if (MediaQuery.sizeOf(context).width >= 1100)
@@ -470,10 +513,14 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
             onPressed: openLogFiles,
             icon: const Icon(Icons.article_outlined, size: 19),
           ),
-          TextButton.icon(
-            onPressed: logs,
-            icon: const Icon(Icons.data_object, size: 18),
-            label: Text('接口记录 ${c.logs.length}'),
+          watch(
+            // 内存记录有上限，条数不再增长时以最新一条的身份判定变化。
+            () => (c.logs.length, c.logs.isEmpty ? null : c.logs.first),
+            () => TextButton.icon(
+              onPressed: logs,
+              icon: const Icon(Icons.data_object, size: 18),
+              label: Text('接口记录 ${c.logs.length}'),
+            ),
           ),
           // 门户入口合并为菜单，窄桌面顶栏不溢出。
           PopupMenuButton<String>(
@@ -564,8 +611,12 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
     ),
   );
 
+  /// 状态条依赖的字段；失败列表原地追加，按长度判定。
+  Object? _statusSelect() => (c.message, c.error, c.busy, c.failures.length);
+
   /// 桌面端顶栏内联状态：绿点 + 当前消息 + 取消 / 查看失败，不独占一行。
-  Widget statusInline() => Row(
+  Widget statusInline() => watch(_statusSelect, _statusInline);
+  Widget _statusInline() => Row(
     mainAxisSize: MainAxisSize.min,
     children: [
       Icon(
@@ -591,7 +642,9 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
         ),
     ],
   );
-  Widget status() => Column(
+  Widget status() =>
+      watch(() => (_statusSelect(), c.querying, c.completed, c.total), _status);
+  Widget _status() => Column(
     children: [
       Padding(
         padding: EdgeInsets.symmetric(
@@ -681,12 +734,17 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
   );
 
   /// 全部工单连续展示，不按窗口高度截断；卡片与当前选中项始终同步。
-  Widget results({bool compact = false}) {
-    final rows = c.works
-        .where(
-          (w) => jsonEncode(w).toLowerCase().contains(filter.toLowerCase()),
-        )
-        .toList();
+  /// 查询期间工单原地追加，按列表身份与长度判定变化。
+  Widget results({bool compact = false}) => watch(
+    () => (c.works, c.works.length, c.querying, c.work),
+    () => _results(compact),
+  );
+  Widget _results(bool compact) {
+    final keyword = filter.toLowerCase();
+    // 未筛选时直接复用列表；筛选文本按工单对象缓存，避免每次重建都序列化全部工单。
+    final rows = keyword.isEmpty
+        ? c.works
+        : c.works.where((w) => _searchText(w).contains(keyword)).toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -913,13 +971,37 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
           ],
         ),
       const Divider(height: 1),
-      if (section >= 2) assetTools(),
+      if (section >= 2)
+        watch(
+          () => (
+            c.assets,
+            c.assets.length,
+            c.asset,
+            c.category,
+            c.busy,
+            c.linkedRecords,
+          ),
+          assetTools,
+        ),
       Expanded(
-        child: AnimatedSwitcher(
-          duration: MediaQuery.of(context).disableAnimations
-              ? Duration.zero
-              : const Duration(milliseconds: 180),
-          child: section == 0 ? detailsArea() : content(),
+        child: watch(
+          () => (
+            c.gallery,
+            c.busy,
+            c.error,
+            // 空态卡片展示进度/失败文案，仅忙碌或失败时才关心消息变化。
+            c.busy || c.error ? c.message : null,
+            c.bytes,
+            c.contentType,
+            c.asset,
+            c.work,
+          ),
+          () => AnimatedSwitcher(
+            duration: MediaQuery.of(context).disableAnimations
+                ? Duration.zero
+                : const Duration(milliseconds: 180),
+            child: section == 0 ? detailsArea() : content(),
+          ),
         ),
       ),
     ],

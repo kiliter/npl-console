@@ -12,11 +12,26 @@ class MessageSession {
   bool rawView = false, collapseAll = false, pretty = false;
 }
 
+/// 后台解析函数签名，默认使用 [parseMessageInBackground]；测试可注入可控实现。
+typedef BackgroundMessageParser =
+    Future<MessageDocument> Function(Object? input, {String mode});
+
 /// 报文解析器：字段折叠、JSON/XML 内嵌内容逐层专注、路径返回与双搜索。
+///
+/// 小报文同步解析；超过 [backgroundThreshold] 的文本报文（原始报文或专注的
+/// 字符串字段）在后台 isolate 解析，期间展示加载态，界面保持可操作。
 class MessageExplorer extends StatefulWidget {
   final String text;
   final MessageSession? session;
-  const MessageExplorer({super.key, required this.text, this.session});
+  final int backgroundThreshold;
+  final BackgroundMessageParser backgroundParser;
+  const MessageExplorer({
+    super.key,
+    required this.text,
+    this.session,
+    this.backgroundThreshold = backgroundParseThreshold,
+    this.backgroundParser = parseMessageInBackground,
+  });
   @override
   State<MessageExplorer> createState() => _MessageExplorerState();
 }
@@ -38,6 +53,13 @@ class _MessageExplorerState extends State<MessageExplorer> {
   set pretty(bool value) => session.pretty = value;
   bool toolsOpen = false;
   late MessageDocument document;
+
+  /// 后台解析进行中。此时 [document] 是原文占位，正文区展示加载态。
+  bool parsing = false;
+
+  /// 解析代次：切换报文、专注、返回或改解析方式后，旧的后台结果直接丢弃。
+  int _parseGeneration = 0;
+
   @override
   void initState() {
     super.initState();
@@ -45,14 +67,18 @@ class _MessageExplorerState extends State<MessageExplorer> {
     if (frames.isEmpty) frames.add(MessageNode('原始报文', '', widget.text));
     keySearch.text = session.keyText;
     keyword.text = session.keywordText;
-    document = parseMessage(frames.last.value, mode: mode);
+    // 首次进入沿用会话中的折叠状态（如退出全屏），只解析不清空。
+    _startParse();
   }
 
   /// 刷新或切换数据时丢弃旧报文的导航状态，避免界面继续展示缓存内容。
   @override
   void didUpdateWidget(covariant MessageExplorer oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.text == widget.text) return;
+    if (identical(oldWidget.text, widget.text) ||
+        oldWidget.text == widget.text) {
+      return;
+    }
     frames
       ..clear()
       ..add(MessageNode('原始报文', '', widget.text));
@@ -67,6 +93,7 @@ class _MessageExplorerState extends State<MessageExplorer> {
 
   @override
   void dispose() {
+    _parseGeneration++;
     keySearch.dispose();
     keyword.dispose();
     scroll.dispose();
@@ -74,11 +101,118 @@ class _MessageExplorerState extends State<MessageExplorer> {
   }
 
   void _parse() {
-    document = parseMessage(frames.last.value, mode: mode);
     collapsed.clear();
     opened.clear();
     collapseAll = false;
+    _treeRevision++;
+    _startParse();
   }
+
+  /// 已解析文档按面包屑节点和解析方式缓存：返回上一层、退出全屏重建时不再重复解析。
+  /// 节点随会话释放后缓存一并回收。
+  static final _documents = Expando<Map<String, MessageDocument>>(
+    'messageDocuments',
+  );
+
+  /// 小报文同步得到结果；大文本先放原文占位并转到后台解析，完成后再刷新。
+  void _startParse() {
+    final generation = ++_parseGeneration;
+    final frame = frames.last, value = frame.value, parseMode = mode;
+    final cache = _documents[frame] ??= {};
+    final cached = cache[parseMode];
+    if (cached != null) {
+      parsing = false;
+      document = cached;
+      return;
+    }
+    if (!shouldParseInBackground(
+      value,
+      mode: parseMode,
+      threshold: widget.backgroundThreshold,
+    )) {
+      parsing = false;
+      document = cache[parseMode] = parseMessage(value, mode: parseMode);
+      return;
+    }
+    final raw = value as String;
+    parsing = true;
+    document = MessageDocument('text', raw, MessageNode('文本', '', raw));
+    widget
+        .backgroundParser(raw, mode: parseMode)
+        .then(
+          (result) {
+            if (!mounted || generation != _parseGeneration) return;
+            setState(() {
+              parsing = false;
+              document = cache[parseMode] = result;
+              _treeRevision++;
+            });
+          },
+          onError: (Object error, StackTrace _) {
+            if (!mounted || generation != _parseGeneration) return;
+            // 后台失败（如平台不支持 isolate）时保留完整原文，不丢内容；不写入缓存，下次可重试。
+            setState(() {
+              parsing = false;
+              document = MessageDocument(
+                'text',
+                raw,
+                MessageNode('文本', '', raw),
+                '后台解析失败，当前显示完整原文（${error.runtimeType}）',
+              );
+            });
+          },
+        );
+  }
+
+  /// 字段树展开状态的版本号；折叠/展开或重新解析时递增，用于判断行缓存是否失效。
+  int _treeRevision = 0;
+  Object? _rowsKey;
+  List<(MessageNode, int)> _rowsCache = const [];
+
+  /// 结构视图的可见行。父级重建（状态条、接口记录更新等）时直接复用，
+  /// 仅在文档、搜索词或折叠状态变化时重新遍历整棵树。
+  List<(MessageNode, int)> _treeRows(bool searching) {
+    final key = (
+      document,
+      keySearch.text,
+      keyword.text,
+      collapseAll,
+      _treeRevision,
+    );
+    if (_rowsKey == key) return _rowsCache;
+    final rows = <(MessageNode, int)>[];
+    if (searching) {
+      rows.addAll(
+        searchMessage(
+          document.root,
+          key: keySearch.text,
+          keyword: keyword.text,
+        ).map((node) => (node, 0)),
+      );
+    } else {
+      final pending = <(MessageNode, int)>[(document.root, 0)];
+      while (pending.isNotEmpty) {
+        final row = pending.removeLast();
+        rows.add(row);
+        final expanded = collapseAll
+            ? opened.contains(row.$1.path)
+            : !collapsed.contains(row.$1.path);
+        if (expanded) {
+          pending.addAll(
+            row.$1.children.reversed.map((node) => (node, row.$2 + 1)),
+          );
+        }
+      }
+    }
+    _rowsKey = key;
+    return _rowsCache = rows;
+  }
+
+  Object? _blocksKey;
+  ({List<List<TextSpan>> blocks, int count}) _blocksCache = (
+    blocks: const [],
+    count: 0,
+  );
 
   void _focus(MessageNode node) => setState(() {
     frames.add(MessageNode(node.name, node.path, node.focusValue));
@@ -142,7 +276,9 @@ class _MessageExplorerState extends State<MessageExplorer> {
                 children: [
                   Expanded(
                     child: Text(
-                      '${document.format.toUpperCase()} · 字段可继续专注',
+                      parsing
+                          ? '后台解析中…'
+                          : '${document.format.toUpperCase()} · 字段可继续专注',
                       style: const TextStyle(
                         fontSize: 11,
                         color: Color(0xff8192a9),
@@ -178,11 +314,62 @@ class _MessageExplorerState extends State<MessageExplorer> {
                 style: const TextStyle(color: Colors.red, fontSize: 12),
               ),
             ),
-          Expanded(child: document.structured && !rawView ? _tree() : _text()),
+          Expanded(
+            child: AnimatedSwitcher(
+              duration: MediaQuery.of(context).disableAnimations
+                  ? Duration.zero
+                  : const Duration(milliseconds: 160),
+              // 仅在“解析中 ↔ 完成”之间淡入；专注、折叠等切换不做过渡。
+              // 只保留当前子树：新旧视图可能共用同一个滚动控制器，不能同时挂载。
+              layoutBuilder: (current, _) => current ?? const SizedBox(),
+              child: KeyedSubtree(
+                key: ValueKey(parsing),
+                child: parsing
+                    ? _parsingView()
+                    : document.structured && !rawView
+                    ? _tree()
+                    : _text(),
+              ),
+            ),
+          ),
         ],
       );
     },
   );
+
+  /// 后台解析时的过渡态：显示报文体量，用户可随时返回上一层或改为纯文本查看。
+  Widget _parsingView() {
+    final length = document.source.length;
+    final size = length >= 1024 * 1024
+        ? '${(length / 1024 / 1024).toStringAsFixed(1)}M'
+        : '${(length / 1024).ceil()}K';
+    return Center(
+      key: const ValueKey('message-parsing'),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(
+            width: 28,
+            height: 28,
+            child: CircularProgressIndicator(strokeWidth: 2.5),
+          ),
+          const SizedBox(height: 14),
+          Text(
+            '正在后台解析报文（约 $size 字符）…',
+            style: const TextStyle(fontSize: 12, color: Color(0xff52647c)),
+          ),
+          const SizedBox(height: 6),
+          TextButton(
+            onPressed: () => setState(() {
+              mode = 'text';
+              _parse();
+            }),
+            child: const Text('直接查看纯文本'),
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _controls() => Padding(
     padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
@@ -245,6 +432,7 @@ class _MessageExplorerState extends State<MessageExplorer> {
                 collapseAll = !collapseAll;
                 collapsed.clear();
                 opened.clear();
+                _treeRevision++;
               }),
               child: Text(collapseAll ? '展开字段' : '折叠字段'),
             ),
@@ -266,30 +454,7 @@ class _MessageExplorerState extends State<MessageExplorer> {
 
   Widget _tree() {
     final searching = keySearch.text.isNotEmpty || keyword.text.isNotEmpty;
-    final rows = <(MessageNode, int)>[];
-    if (searching) {
-      rows.addAll(
-        searchMessage(
-          document.root,
-          key: keySearch.text,
-          keyword: keyword.text,
-        ).map((node) => (node, 0)),
-      );
-    } else {
-      final pending = <(MessageNode, int)>[(document.root, 0)];
-      while (pending.isNotEmpty) {
-        final row = pending.removeLast();
-        rows.add(row);
-        final expanded = collapseAll
-            ? opened.contains(row.$1.path)
-            : !collapsed.contains(row.$1.path);
-        if (expanded) {
-          pending.addAll(
-            row.$1.children.reversed.map((node) => (node, row.$2 + 1)),
-          );
-        }
-      }
-    }
+    final rows = _treeRows(searching);
     if (rows.isEmpty) return const Center(child: Text('未找到匹配字段'));
     return Column(
       children: [
@@ -348,6 +513,7 @@ class _MessageExplorerState extends State<MessageExplorer> {
                                     ? '折叠 ${node.name}'
                                     : '展开 ${node.name}',
                                 onPressed: () => setState(() {
+                                  _treeRevision++;
                                   if (collapseAll) {
                                     expanded
                                         ? opened.remove(node.path)
@@ -429,6 +595,91 @@ class _MessageExplorerState extends State<MessageExplorer> {
   }
 
   Widget _text() {
+    final term = keyword.text;
+    final (:blocks, :count) = _textBlocksFor(term);
+    return Column(
+      children: [
+        if (term.isNotEmpty)
+          Text('匹配 $count 处', style: const TextStyle(fontSize: 11)),
+        if (keySearch.text.isNotEmpty)
+          const Text(
+            '字段名搜索仅对解析成功的结构视图生效',
+            style: TextStyle(fontSize: 11, color: Color(0xff8192a9)),
+          ),
+        Expanded(
+          child: blocks.length > lazyTextBlocks
+              ? _lazyText(blocks)
+              : Scrollbar(
+                  controller: scroll,
+                  thumbVisibility: true,
+                  child: SingleChildScrollView(
+                    key: const ValueKey('complete-text'),
+                    controller: scroll,
+                    padding: const EdgeInsets.all(22),
+                    child: SizedBox(
+                      width: double.infinity,
+                      // 连续滚动、跨块选中；每块独立排版和绘制，避免整份长报文
+                      // 形成一个巨大的 RenderParagraph。分块只影响显示，不改原文。
+                      child: SelectionArea(
+                        child: Column(
+                          key: const ValueKey('raw-message-text'),
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            for (var i = 0; i < blocks.length; i++)
+                              RepaintBoundary(
+                                child: Text.rich(
+                                  TextSpan(children: blocks[i]),
+                                  key: ValueKey('raw-message-block-$i'),
+                                  softWrap: true,
+                                  style: _rawStyle,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+        ),
+      ],
+    );
+  }
+
+  /// 原文超过该块数（约 256K 字符）时改为懒加载列表，只排版可见块；
+  /// 较短原文仍整体排版，保证跨块连续选中。复制整份使用工具栏的复制按钮。
+  static const lazyTextBlocks = 256;
+
+  Widget _lazyText(List<List<TextSpan>> blocks) => Scrollbar(
+    controller: scroll,
+    thumbVisibility: true,
+    child: SelectionArea(
+      child: ListView.builder(
+        key: const ValueKey('complete-text-lazy'),
+        controller: scroll,
+        padding: const EdgeInsets.all(22),
+        itemCount: blocks.length,
+        itemBuilder: (context, i) => Text.rich(
+          TextSpan(children: blocks[i]),
+          key: ValueKey('raw-message-block-$i'),
+          softWrap: true,
+          style: _rawStyle,
+        ),
+      ),
+    ),
+  );
+
+  static const _rawStyle = TextStyle(
+    fontFamily: 'Menlo',
+    fontSize: 13,
+    height: 1.8,
+    color: Color(0xff36567d),
+  );
+
+  /// 原文视图的分块与匹配数。长报文格式化、全文搜索和分块都是 O(n) 的字符串复制，
+  /// 结果按文档、格式化开关与关键字缓存，父级重建时不再重复计算。
+  ({List<List<TextSpan>> blocks, int count}) _textBlocksFor(String term) {
+    final key = (document, pretty, term);
+    if (_blocksKey == key) return _blocksCache;
     var text = document.source;
     if (pretty && document.format == 'json') {
       text = const JsonEncoder.withIndent('  ').convert(document.root.value);
@@ -437,7 +688,6 @@ class _MessageExplorerState extends State<MessageExplorer> {
       text = (document.root.value as XmlNode).toXmlString(pretty: true);
     }
     final spans = <TextSpan>[];
-    final term = keyword.text;
     var offset = 0, count = 0;
     if (term.isNotEmpty) {
       final value = text.toLowerCase(), target = term.toLowerCase();
@@ -456,56 +706,8 @@ class _MessageExplorerState extends State<MessageExplorer> {
       }
     }
     spans.add(TextSpan(text: text.substring(offset)));
-    final blocks = _textBlocks(spans);
-    return Column(
-      children: [
-        if (term.isNotEmpty)
-          Text('匹配 $count 处', style: const TextStyle(fontSize: 11)),
-        if (keySearch.text.isNotEmpty)
-          const Text(
-            '字段名搜索仅对解析成功的结构视图生效',
-            style: TextStyle(fontSize: 11, color: Color(0xff8192a9)),
-          ),
-        Expanded(
-          child: Scrollbar(
-            controller: scroll,
-            thumbVisibility: true,
-            child: SingleChildScrollView(
-              key: const ValueKey('complete-text'),
-              controller: scroll,
-              padding: const EdgeInsets.all(22),
-              child: SizedBox(
-                width: double.infinity,
-                // 连续滚动、跨块选中；每块独立排版和绘制，避免整份长报文
-                // 形成一个巨大的 RenderParagraph。分块只影响显示，不改原文。
-                child: SelectionArea(
-                  child: Column(
-                    key: const ValueKey('raw-message-text'),
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      for (var i = 0; i < blocks.length; i++)
-                        RepaintBoundary(
-                          child: Text.rich(
-                            TextSpan(children: blocks[i]),
-                            key: ValueKey('raw-message-block-$i'),
-                            softWrap: true,
-                            style: const TextStyle(
-                              fontFamily: 'Menlo',
-                              fontSize: 13,
-                              height: 1.8,
-                              color: Color(0xff36567d),
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
+    _blocksKey = key;
+    return _blocksCache = (blocks: _textBlocks(spans), count: count);
   }
 
   /// 限制单个文本块的 UTF-16 长度，同时保留全部字符与搜索高亮。

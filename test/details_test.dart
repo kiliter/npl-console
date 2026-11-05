@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:npl_maintenance/ui/large_text_view.dart';
 import 'package:npl_maintenance/ui/work_details.dart';
 import 'package:npl_maintenance/ui/query_sheet.dart';
 import 'package:npl_maintenance/core/maintenance_controller.dart';
@@ -46,6 +47,31 @@ void main() {
       findsNothing,
     );
     expect(find.text('没有匹配字段，请尝试其他关键词。'), findsOneWidget);
+  });
+  testWidgets('超长字段改用分块视图，搜索仍覆盖全文', (tester) async {
+    final huge = '${List.filled(6000, '超长内容').join()}结尾标记';
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: WorkDetails(
+            record: {'caseNo': 'DEMO', 'innerJson': huge},
+            onDownload: () {},
+          ),
+        ),
+      ),
+    );
+    expect(huge.length, greaterThan(largeFieldThreshold));
+    expect(find.byType(LargeFieldText), findsOneWidget);
+    expect(
+      find.byWidgetPredicate((w) => w is SelectableText && w.data == huge),
+      findsNothing,
+    );
+    // 关键字位于长值末尾，搜索使用缓存的完整文本，不受分块显示影响。
+    await tester.enterText(find.byKey(const ValueKey('field-search')), '结尾标记');
+    await tester.pumpAndSettle();
+    expect(find.byType(LargeFieldText), findsOneWidget);
+    expect(find.text('没有匹配字段，请尝试其他关键词。'), findsNothing);
+    expect(tester.takeException(), isNull);
   });
   testWidgets('范围超过十二个月就地拒绝且不请求接口', (tester) async {
     final c = MaintenanceController();

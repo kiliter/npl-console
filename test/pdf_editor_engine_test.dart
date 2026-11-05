@@ -348,4 +348,75 @@ void main() {
     )).objects.singleWhere((o) => o.kind == PdfObjectKind.image);
     expect(last.bounds.top, closeTo(.5, .002));
   });
+
+  group('渲染调度与文档缓存', () {
+    late Uint8List fixture;
+    setUpAll(
+      () => fixture = File('test/fixtures/editor.pdf').readAsBytesSync(),
+    );
+
+    test('同一版本的多页预览与缩略图只打开一次文档，结果与逐页渲染一致', () async {
+      final cached = PdfEditEngine();
+      final count = (await cached.inspect(fixture, 0)).pageCount;
+      expect(count, greaterThan(1));
+      final pages = await Future.wait([
+        for (var i = 0; i < count; i++) cached.inspect(fixture, i),
+      ]);
+      final thumbs = await Future.wait([
+        for (var i = 0; i < count; i++) cached.thumbnail(fixture, i),
+      ]);
+      expect(cached.debugOpenCount, 1);
+      for (var i = 0; i < count; i++) {
+        final png = img.decodePng(pages[i].png)!;
+        expect(png.width, greaterThan(500));
+        expect(img.decodePng(thumbs[i])!.width, 100);
+        expect(pages[i].pageCount, count);
+      }
+      // 新的字节版本单独打开；释放后再次渲染会重新打开。
+      final copy = Uint8List.fromList(fixture);
+      await cached.inspect(copy, 0);
+      expect(cached.debugOpenCount, 2);
+      await cached.releaseDocuments();
+      await cached.inspect(copy, 0);
+      expect(cached.debugOpenCount, 3);
+      await cached.releaseDocuments();
+    });
+
+    test('缓存文档数量有界，最久未用的版本被淘汰', () async {
+      final cached = PdfEditEngine();
+      final revisions = [
+        for (var i = 0; i <= PdfEditEngine.maxOpenDocuments; i++)
+          Uint8List.fromList(fixture),
+      ];
+      for (final bytes in revisions) {
+        await cached.thumbnail(bytes, 0);
+      }
+      expect(cached.debugOpenCount, revisions.length);
+      // 最新的几个版本仍在缓存中，最早的版本已被淘汰需要重新打开。
+      await cached.thumbnail(revisions.last, 0);
+      expect(cached.debugOpenCount, revisions.length);
+      await cached.thumbnail(revisions.first, 0);
+      expect(cached.debugOpenCount, revisions.length + 1);
+      await cached.releaseDocuments();
+    });
+
+    test('排队期间已不需要的页面跳过渲染，页面预览优先于缩略图', () async {
+      final cached = PdfEditEngine();
+      await cached.inspect(fixture, 0);
+      await expectLater(
+        cached.inspect(fixture, 1, isNeeded: () => false),
+        throwsA(isA<PdfRenderSkipped>()),
+      );
+      final order = <String>[];
+      final thumbs = [
+        for (var i = 0; i < 8; i++)
+          cached.thumbnail(fixture, i % 3).then((_) => order.add('缩略图')),
+      ];
+      final page = cached.inspect(fixture, 2).then((_) => order.add('页面'));
+      await Future.wait([...thumbs, page]);
+      // 页面在缩略图之后才发出，但只需等待当前正在渲染的一张缩略图。
+      expect(order.indexOf('页面'), lessThan(order.length - 1));
+      await cached.releaseDocuments();
+    });
+  });
 }

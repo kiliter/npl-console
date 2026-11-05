@@ -9,7 +9,11 @@ class _DelayedEngine extends PdfEditEngine {
   final first = Completer<PdfPageSnapshot>();
   int calls = 0;
   @override
-  Future<PdfPageSnapshot> inspect(Uint8List bytes, int pageIndex) async {
+  Future<PdfPageSnapshot> inspect(
+    Uint8List bytes,
+    int pageIndex, {
+    bool Function()? isNeeded,
+  }) async {
     if (calls++ == 0) return first.future;
     return PdfPageSnapshot(Uint8List(0), const Size(595, 842), [], 1);
   }

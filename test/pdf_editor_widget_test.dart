@@ -182,7 +182,14 @@ void main() {
         final scroll = tester
             .state<ScrollableState>(
               find
-                  .descendant(of: source, matching: find.byType(Scrollable))
+                  .descendant(
+                    of: source,
+                    matching: find.byWidgetPredicate(
+                      (w) =>
+                          w is Scrollable &&
+                          w.axisDirection == AxisDirection.down,
+                    ),
+                  )
                   .first,
             )
             .position;

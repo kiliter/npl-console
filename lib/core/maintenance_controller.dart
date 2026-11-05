@@ -71,6 +71,10 @@ class MaintenanceController extends ChangeNotifier {
   List<Record> works = [], linkedRecords = [];
   List<Asset> assets = [];
   List<GalleryItem> gallery = [];
+
+  /// 画廊内单张图片状态（加载、失败、字节）原地变化时递增，
+  /// 供界面按需重建画廊，而不必监听全部通知。
+  int galleryRevision = 0;
   final QueryCache cache = QueryCache();
   final Map<String, Future<http.Response>> _pending = {};
   int cacheHits = 0;
@@ -207,6 +211,7 @@ class MaintenanceController extends ChangeNotifier {
         item.error = '已取消读取，可重试';
       }
     }
+    galleryRevision++;
     final wasQuery = querying;
     querying = false;
     message = wasQuery ? '查询已取消，保留 $completed / $total 个已完成月份的结果。' : '文件读取已取消。';
@@ -279,10 +284,10 @@ class MaintenanceController extends ChangeNotifier {
       final response = await future;
       if (ticket != _generation) throw const _Cancelled();
       if (!binary) {
-        final decoded = jsonDecode(utf8.decode(response.bodyBytes));
-        if (decoded is! List || decoded.any((item) => item is! Map)) {
-          throw const FormatException('接口未返回预期数组，请查看接口记录');
-        }
+        final decoded = await _decodeRecords(response.bodyBytes);
+        if (ticket != _generation) throw const _Cancelled();
+        // 校验时已完成解码，交给紧随其后的 _list 一次性取用，避免同一响应重复解析。
+        _decoded[response.bodyBytes] = decoded;
       } else if (response.bodyBytes.isEmpty) {
         throw const FormatException('OBS 返回空文件');
       }
@@ -328,7 +333,7 @@ class MaintenanceController extends ChangeNotifier {
         : jsonEncode(body);
     final log = CallLog(uri.toString(), payload, binary);
     final elapsed = Stopwatch()..start();
-    logs.insert(0, log);
+    _addLog(log);
     notifyListeners();
     final client = _client!;
     try {
@@ -376,6 +381,15 @@ class MaintenanceController extends ChangeNotifier {
     }
   }
 
+  /// 内存中最多保留的接口记录条数；完整记录始终追加到磁盘 JSONL，不受此限制。
+  /// 长时间使用时每条记录都持有完整响应文本，不设上限会持续占用内存并加重 GC 停顿。
+  static const maxMemoryLogs = 300;
+
+  void _addLog(CallLog log) {
+    logs.insert(0, log);
+    if (logs.length > maxMemoryLogs) logs.removeRange(maxMemoryLogs, logs.length);
+  }
+
   /// 显式挑选字段，避免将包含 JWT 的请求头序列化到磁盘。
   Future<void> _persist(CallLog log, int durationMs, String contentType) =>
       logStore.append({
@@ -414,7 +428,7 @@ class MaintenanceController extends ChangeNotifier {
       false,
       contentType: contentType,
     );
-    logs.insert(0, log);
+    _addLog(log);
     notifyListeners();
     return (token: token, log: log);
   }
@@ -436,12 +450,24 @@ class MaintenanceController extends ChangeNotifier {
       ticket,
       forceRefresh: forceRefresh,
     );
-    final value = jsonDecode(utf8.decode(response.bodyBytes));
-    if (value is! List || value.any((item) => item is! Map)) {
-      throw const FormatException('接口未返回预期数组，请查看接口记录');
-    }
-    return value.map((item) => Map<String, dynamic>.from(item as Map)).toList();
+    final bodyBytes = response.bodyBytes;
+    final value = _decoded[bodyBytes] ?? await _decodeRecords(bodyBytes);
+    // 一次性取用：缓存命中时重新解码，保证每个调用方拿到独立的记录对象。
+    _decoded[bodyBytes] = null;
+    return value;
   }
+
+  /// 已校验响应的解码结果，按响应字节对象关联，随响应释放。
+  final Expando<List<Record>> _decoded = Expando('decodedRecords');
+
+  /// 超过该大小的 JSON 在后台 isolate 解析，避免大报文阻塞界面帧。
+  static const _backgroundDecodeBytes = 64 * 1024;
+
+  static Future<List<Record>> _decodeRecords(Uint8List bytes) async =>
+      bytes.length < _backgroundDecodeBytes
+      ? _parseRecords(bytes)
+      : await compute(_parseRecords, bytes, debugLabel: 'decodeRecords');
+
 
   /// 范围内逐月请求，部分失败保留成功月份，首屏始终要求用户明确选择工单。
   Future<void> search(
@@ -697,7 +723,7 @@ class MaintenanceController extends ChangeNotifier {
       contentType: 'multipart/form-data',
     );
     final elapsed = Stopwatch()..start();
-    logs.insert(0, log);
+    _addLog(log);
     notifyListeners();
     final client = _client!;
     try {
@@ -943,6 +969,7 @@ class MaintenanceController extends ChangeNotifier {
       item.error = _errorText(exception);
     } finally {
       if (ticket == _generation) item.loading = false;
+      galleryRevision++;
     }
   }
 
@@ -950,6 +977,7 @@ class MaintenanceController extends ChangeNotifier {
     if (work == null || item.loading) return;
     item.loading = true;
     item.error = null;
+    galleryRevision++;
     final ticket = _generation;
     _client ??= clientFactory();
     notifyListeners();
@@ -985,6 +1013,15 @@ class MaintenanceController extends ChangeNotifier {
 
 class _Cancelled implements Exception {
   const _Cancelled();
+}
+
+/// 顶层函数便于 compute 在后台 isolate 执行；格式不符时抛出与原逻辑相同的提示。
+List<Record> _parseRecords(Uint8List bytes) {
+  final value = jsonDecode(utf8.decode(bytes));
+  if (value is! List || value.any((item) => item is! Map)) {
+    throw const FormatException('接口未返回预期数组，请查看接口记录');
+  }
+  return value.map((item) => Map<String, dynamic>.from(item as Map)).toList();
 }
 
 /// 单张图片状态，失败与加载状态均按文件独立记录。

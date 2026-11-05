@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../core/breakpoints.dart';
 import '../core/contracts.dart';
+import 'large_text_view.dart';
 
 /// WO_INFO 实际列对应的 JSON 属性，依据用户提供的 WO_INFO202610 建表语句，共 62 列。
 /// 详情与 JSON 导出使用同一列表，排除 Bean 的辅助属性和关联对象。
@@ -205,6 +206,25 @@ class _WorkDetailsState extends State<WorkDetails> {
       ? const JsonEncoder.withIndent('  ').convert(v)
       : '$v';
 
+  /// 按工单记录缓存字段列表、展示文本与小写搜索文本。
+  /// 搜索框每输入一个字符都会重建，不缓存时每次都要重新格式化 innerJson 等长 JSON。
+  Record? _record;
+  List<MapEntry<String, dynamic>> _entries = const [];
+  final _texts = <String, String>{}, _searchTexts = <String, String>{};
+
+  void _prepare() {
+    if (identical(_record, widget.record)) return;
+    _record = widget.record;
+    _entries = woInfoFields(widget.record).entries.toList();
+    _texts.clear();
+    _searchTexts.clear();
+    for (final e in _entries) {
+      final text = _texts[e.key] = value(e.value);
+      _searchTexts[e.key] = '${fieldLabels[e.key]} ${e.key} $text'
+          .toLowerCase();
+    }
+  }
+
   /// 单个字段行：标签（中文 · key）+ 复制按钮 + 可选中值。
   Widget fieldRow(MapEntry<String, dynamic> e) => Container(
     padding: const EdgeInsets.symmetric(vertical: 9),
@@ -232,7 +252,11 @@ class _WorkDetailsState extends State<WorkDetails> {
                 tooltip: '复制 ${e.key}',
                 onPressed: () {
                   Clipboard.setData(
-                    ClipboardData(text: e.value == null ? 'null' : value(e.value)),
+                    ClipboardData(
+                      text: e.value == null
+                          ? 'null'
+                          : _texts[e.key] ?? value(e.value),
+                    ),
                   );
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
@@ -247,19 +271,25 @@ class _WorkDetailsState extends State<WorkDetails> {
           ],
         ),
         const SizedBox(height: 4),
-        SelectableText(
-          value(e.value),
-          style: TextStyle(
-            fontSize: 12,
-            height: 1.55,
-            color: e.value == null
-                ? const Color(0xffa4afbf)
-                : const Color(0xff1b2b42),
-          ),
-        ),
+        _fieldText(e),
       ],
     ),
   );
+
+  Widget _fieldText(MapEntry<String, dynamic> e) {
+    final text = _texts[e.key] ?? value(e.value);
+    final style = TextStyle(
+      fontSize: 12,
+      height: 1.55,
+      color: e.value == null
+          ? const Color(0xffa4afbf)
+          : const Color(0xff1b2b42),
+    );
+    if (text.length > largeFieldThreshold) {
+      return LargeFieldText(text: text, style: style);
+    }
+    return SelectableText(text, style: style);
+  }
 
   /// 字段网格：移动端单列；桌面端按屏宽 3 / 4 列等宽铺开（原型一屏密度）。
   Widget fieldGrid(List<MapEntry<String, dynamic>> fields) => LayoutBuilder(
@@ -280,14 +310,11 @@ class _WorkDetailsState extends State<WorkDetails> {
   );
   @override
   Widget build(BuildContext context) {
-    final entries = woInfoFields(widget.record).entries.toList();
-    final matches = entries
-        .where(
-          (e) => '${fieldLabels[e.key]} ${e.key} ${value(e.value)}'
-              .toLowerCase()
-              .contains(filter.toLowerCase()),
-        )
-        .toList();
+    _prepare();
+    final entries = _entries, keyword = filter.toLowerCase();
+    final matches = keyword.isEmpty
+        ? entries
+        : entries.where((e) => _searchTexts[e.key]!.contains(keyword)).toList();
     final groups = <String, List<MapEntry<String, dynamic>>>{};
     for (final e in matches) {
       final title = grouped

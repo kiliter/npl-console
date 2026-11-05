@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../core/local_config.dart';
 import '../core/contracts.dart';
 import '../core/maintenance_controller.dart';
+import 'listenable_selector.dart';
 
 /// 查询条件用于回填历史；本地只保存条件，不包含密钥、JWT 或接口响应。
 class QueryDraft {
@@ -169,9 +170,19 @@ class _QuerySheetState extends State<QuerySheet> {
       padding: const EdgeInsets.symmetric(vertical: 19, horizontal: 12),
     ),
   );
+
+  /// 控制器任何变化（接口记录、图片加载等）都会通知；面板只在本次提交的查询
+  /// 进行中关心进度与消息，其余时间不随控制器重建。
+  Object? _progress() {
+    final c = widget.controller;
+    if (!(c.querying && submitted)) return null;
+    return (c.total, c.completed, c.message, c.works.length);
+  }
+
   @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-    animation: widget.controller,
+  Widget build(BuildContext context) => ListenableSelector<Object?>(
+    listenable: widget.controller,
+    selector: _progress,
     builder: (context, _) {
       final c = widget.controller, running = c.querying && submitted;
       return PopScope(

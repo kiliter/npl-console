@@ -51,7 +51,8 @@ class RequestLogStore {
         if (maxBytes != null && _bytes >= maxBytes!) _file = null;
         await _open();
         await _file!.writeAsString(line, mode: FileMode.append, flush: true);
-        _bytes += utf8.encode(line).length;
+        // 仅分卷日志需要累计字节数；接口日志不限大小，省去整行再编码一次的复制。
+        if (maxBytes != null) _bytes += utf8.encode(line).length;
         error = null;
       } catch (exception) {
         error = '接口日志写入失败（${exception.runtimeType}）';

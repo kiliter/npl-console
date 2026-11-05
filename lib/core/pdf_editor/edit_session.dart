@@ -86,11 +86,16 @@ class EditDocument {
   Uint8List? saved;
   final _pages = <int, PdfPageSnapshot>{};
   final _pendingPages = <int, Future<PdfPageSnapshot>>{};
-  Future<void> _renderQueue = Future.value();
   List<Size> get pageSizes =>
       snapshot.pageSizes ?? List.filled(snapshot.pageCount, snapshot.size);
 
+  /// 预览页缓存上限。快速编码的预览图约 0.3～0.6 MB，保留 8 页便于来回滚动。
+  static const maxCachedPages = 8;
+
   /// 页面预览局部加载，不触发整个会话的 busy 或 notifyListeners。
+  ///
+  /// 各页请求直接交给引擎调度：PDFium 渲染在引擎内串行，PNG 编码在多个
+  /// isolate 中并行；[isNeeded] 在真正轮到渲染时才判断，滚走的页面直接跳过。
   Future<PdfPageSnapshot> preview(
     PdfEditEngine engine,
     int index, {
@@ -108,30 +113,23 @@ class EditDocument {
         '页面预览排队',
         data: {'页码': index + 1, '文档': identityHashCode(revision)},
       );
-      final task = _renderQueue.then((_) async {
-        if (isNeeded != null && !isNeeded()) {
-          throw const FormatException('页面已离开显示区域');
-        }
-        final result = await PdfDiagnostics.trace(
-          '页面预览',
-          () => engine.inspect(revision, index),
-          data: {'页码': index + 1, '文档': identityHashCode(revision)},
-        );
-        if (identical(bytes, revision)) {
-          _pages[index] = result;
-          while (_pages.length > 5 ||
-              (_pages.length > 1 &&
-                  _pages.values.fold<int>(0, (n, p) => n + p.png.length) >
-                      24 * 1024 * 1024)) {
-            _pages.remove(_pages.keys.first);
-          }
-        }
-        return result;
-      });
-      _renderQueue = task.then<void>(
-        (_) {},
-        onError: (Object _, StackTrace _) {},
-      );
+      final task =
+          PdfDiagnostics.trace(
+            '页面预览',
+            () => engine.inspect(revision, index, isNeeded: isNeeded),
+            data: {'页码': index + 1, '文档': identityHashCode(revision)},
+          ).then((result) {
+            if (identical(bytes, revision)) {
+              _pages[index] = result;
+              while (_pages.length > maxCachedPages ||
+                  (_pages.length > 1 &&
+                      _pages.values.fold<int>(0, (n, p) => n + p.png.length) >
+                          24 * 1024 * 1024)) {
+                _pages.remove(_pages.keys.first);
+              }
+            }
+            return result;
+          });
       task.then<void>(
         (_) {
           if (identical(_pendingPages[index], task)) {
@@ -162,8 +160,31 @@ class EditDocument {
   EditDocument(this.caseNo, Uint8List initial, this.snapshot)
     : original = Uint8List.fromList(initial),
       bytes = Uint8List.fromList(initial);
-  bool get dirty => !listEquals(bytes, saved ?? original);
-  bool get edited => !listEquals(bytes, original);
+
+  /// 与已保存版本不同。逐字节比较数 MB 的 PDF 代价不低，而工具栏每次刷新都要读取，
+  /// 结果按 (bytes, saved) 的对象身份缓存；各操作总是替换字节数组而非原地修改。
+  bool get dirty {
+    final key = (bytes, saved);
+    if (_dirtyKey != key) {
+      _dirtyKey = key;
+      _dirty = !listEquals(bytes, saved ?? original);
+    }
+    return _dirty;
+  }
+
+  /// 与原始单据不同，按 bytes 身份缓存，理由同 [dirty]。
+  bool get edited {
+    if (!identical(_editedBytes, bytes)) {
+      _editedBytes = bytes;
+      _edited = !listEquals(bytes, original);
+    }
+    return _edited;
+  }
+
+  Object? _dirtyKey;
+  bool _dirty = false;
+  Uint8List? _editedBytes;
+  bool _edited = false;
   void commit(Uint8List next) {
     undo.add(bytes);
     while (undo.length > 8 ||
@@ -187,6 +208,11 @@ class PdfEditSession extends ChangeNotifier {
   String? error;
   String? syncStatus;
   bool needsSync = false;
+
+  /// 共享区图片（增删、放置、页码）及删除标记的版本号。
+  /// 共享区卡片、连线和画布预览只依赖这些数据，按版本号判断是否需要刷新，
+  /// 不必随 busy 切换、同步状态文字等其它通知一起重建。
+  int materialsRevision = 0;
   int _revision = 0;
   bool _disposed = false;
   PdfEditSession({PdfEditEngine? engine}) : engine = engine ?? PdfEditEngine();
@@ -202,18 +228,25 @@ class PdfEditSession extends ChangeNotifier {
     error = null;
     notifyListeners();
     try {
-      final nextTarget = await PdfDiagnostics.trace(
+      // 新老单据同时发出：PDFium 渲染一份时，另一份的 PNG 编码并行进行。
+      final targetTask = PdfDiagnostics.trace(
         '目标单据解析及渲染',
         () => engine.inspect(targetBytes, 0),
       );
-      final nextSource = sourceBytes == null
+      final sourceTask = sourceBytes == null
           ? null
-          : await PdfDiagnostics.trace(
+          : PdfDiagnostics.trace(
               '来源单据解析及渲染',
               () => engine.inspect(sourceBytes, 0),
             );
+      // 先挂上空监听，任一份先失败都不会变成未捕获异常；await 仍会收到错误。
+      targetTask.ignore();
+      sourceTask?.ignore();
+      final nextTarget = await targetTask;
+      final nextSource = await sourceTask;
       if (_disposed || revision != _revision) return;
       materials.clear();
+      materialsRevision++;
       syncStatus = null;
       needsSync = false;
       target = EditDocument(targetNo, targetBytes, nextTarget);
@@ -244,6 +277,7 @@ class PdfEditSession extends ChangeNotifier {
       materials.where((m) => m.staged && m.targetPage == -1).length;
 
   void previewChanged() {
+    materialsRevision++;
     needsSync = true;
     syncStatus =
         '画布预览 · 点击应用后生成单据${unmatchedImages == 0 ? '' : ' · $unmatchedImages 张图片暂无对应页'}';
@@ -386,6 +420,7 @@ class PdfEditSession extends ChangeNotifier {
         throw const FormatException('共享素材超过 64 MiB，请先移除部分素材');
       }
       materials.add(SharedPdfImage(png, doc.caseNo, doc.page + 1, ratio));
+      materialsRevision++;
     });
   }
 
@@ -434,6 +469,7 @@ class PdfEditSession extends ChangeNotifier {
       }
       materials.addAll(additions);
       if (additions.isNotEmpty) {
+        materialsRevision++;
         needsSync = true;
         syncStatus = null;
       }
@@ -737,10 +773,12 @@ class PdfEditSession extends ChangeNotifier {
 
   void reset() {
     _revision++;
+    engine.releaseDocuments();
     busy = false;
     source = target = previewTarget = null;
     deletedImages.clear();
     materials.clear();
+    materialsRevision++;
     needsSync = false;
     syncStatus = null;
     error = null;
@@ -771,6 +809,7 @@ class PdfEditSession extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _revision++;
+    engine.releaseDocuments();
     materials.clear();
     source = target = previewTarget = null;
     deletedImages.clear();

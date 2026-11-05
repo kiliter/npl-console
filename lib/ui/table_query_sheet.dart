@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import '../core/contracts.dart';
 import '../core/inter_result_decryption.dart';
 import '../core/maintenance_controller.dart';
+import 'large_text_view.dart';
 import 'query_sheet.dart';
 import 'work_details.dart';
 
@@ -436,66 +437,7 @@ class _TableQuerySheetState extends State<TableQuerySheet> {
                         style: const TextStyle(fontWeight: FontWeight.w600),
                       ),
                       const SizedBox(height: 12),
-                      if (rows!.isNotEmpty)
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(10),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              border: Border.all(
-                                color: const Color(0xffe4ebf4),
-                              ),
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: SingleChildScrollView(
-                              scrollDirection: Axis.horizontal,
-                              child: DataTable(
-                                headingRowHeight: 40,
-                                dataRowMinHeight: 40,
-                                dataRowMaxHeight: 48,
-                                showCheckboxColumn: false,
-                                columns: [
-                                  for (final key in fields)
-                                    DataColumn(
-                                      label: Text(
-                                        fieldLabels[key] ?? key,
-                                        style: const TextStyle(fontSize: 12),
-                                      ),
-                                    ),
-                                ],
-                                rows: [
-                                  for (final record in rows!)
-                                    DataRow(
-                                      onSelectChanged: (_) => showDialog<void>(
-                                        context: context,
-                                        builder: (_) => RecordDetailsDialog(
-                                          table: table,
-                                          record: record,
-                                        ),
-                                      ),
-                                      cells: [
-                                        for (final key in fields)
-                                          DataCell(
-                                            ConstrainedBox(
-                                              constraints: const BoxConstraints(
-                                                maxWidth: 220,
-                                              ),
-                                              child: Text(
-                                                _cellText(record[key]),
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: const TextStyle(
-                                                  fontSize: 12,
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                      ],
-                                    ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
+                      if (rows!.isNotEmpty) _resultTable(fields),
                     ],
                   ],
                 ),
@@ -520,6 +462,68 @@ class _TableQuerySheetState extends State<TableQuerySheet> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// 结果表格按（结果列表、表类型）缓存同一个组件实例。
+  /// 输入密钥、选择月份等操作会重建整个面板，返回相同实例时 Flutter 直接跳过
+  /// 表格子树，不再为每行每列重新序列化单元格。
+  Object? _tableKey;
+  Widget? _table;
+  Widget _resultTable(List<String> fields) {
+    final cacheKey = (rows, table);
+    if (_tableKey == cacheKey && _table != null) return _table!;
+    _tableKey = cacheKey;
+    return _table = ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        decoration: BoxDecoration(
+          border: Border.all(color: const Color(0xffe4ebf4)),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: DataTable(
+            headingRowHeight: 40,
+            dataRowMinHeight: 40,
+            dataRowMaxHeight: 48,
+            showCheckboxColumn: false,
+            columns: [
+              for (final key in fields)
+                DataColumn(
+                  label: Text(
+                    fieldLabels[key] ?? key,
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ),
+            ],
+            rows: [
+              for (final record in rows!)
+                DataRow(
+                  onSelectChanged: (_) => showDialog<void>(
+                    context: context,
+                    builder: (_) =>
+                        RecordDetailsDialog(table: table, record: record),
+                  ),
+                  cells: [
+                    for (final key in fields)
+                      DataCell(
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 220),
+                          child: Text(
+                            _cellText(record[key]),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -561,6 +565,13 @@ class RecordDetailsDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final entries = record.entries.where((e) => _hasValue(e.value)).toList();
+    // 每个字段只格式化一次，展示与复制共用。
+    final texts = {for (final e in entries) e.key: _valueText(e.value)};
+    const style = TextStyle(
+      fontSize: 13,
+      height: 1.65,
+      color: Color(0xff1b2b42),
+    );
     return AlertDialog(
       title: Text('${table.label}记录详情 · ${entries.length} 项'),
       content: SizedBox(
@@ -596,7 +607,7 @@ class RecordDetailsDialog extends StatelessWidget {
                             tooltip: '复制 ${e.key}',
                             onPressed: () {
                               Clipboard.setData(
-                                ClipboardData(text: _valueText(e.value)),
+                                ClipboardData(text: texts[e.key]!),
                               );
                               ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(
@@ -611,14 +622,9 @@ class RecordDetailsDialog extends StatelessWidget {
                       ],
                     ),
                     const SizedBox(height: 4),
-                    SelectableText(
-                      _valueText(e.value),
-                      style: const TextStyle(
-                        fontSize: 13,
-                        height: 1.65,
-                        color: Color(0xff1b2b42),
-                      ),
-                    ),
+                    texts[e.key]!.length > largeFieldThreshold
+                        ? LargeFieldText(text: texts[e.key]!, style: style)
+                        : SelectableText(texts[e.key]!, style: style),
                   ],
                 ),
               ),

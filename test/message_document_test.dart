@@ -110,4 +110,80 @@ void main() {
     expect(inner.format, 'json');
     expect(searchMessage(inner.root, key: 'loginNo').single.value, 'DEMO1');
   });
+
+  group('大报文后台解析', () {
+    // 构造超过阈值的报文：外层 JSON、内嵌转义 JSON 字符串及 XML 字段。
+    final big = jsonEncode({
+      'head': {'caseNo': 'DEMO'},
+      'xml': '<root a="1"><item>甲</item></root>',
+      'inner': jsonEncode({'deep': '内层'}),
+      'list': List.generate(4000, (i) => {'i': i, 'text': '业务内容$i' * 4}),
+    });
+
+    test('只有超过阈值的字符串才转后台，结构化节点与纯文本不转', () {
+      expect(big.length, greaterThan(backgroundParseThreshold));
+      expect(shouldParseInBackground(big), isTrue);
+      expect(shouldParseInBackground(big, mode: 'text'), isFalse);
+      expect(shouldParseInBackground('{"a":1}'), isFalse);
+      expect(shouldParseInBackground({'a': big}), isFalse);
+      expect(shouldParseInBackground('{"a":1}', threshold: 3), isTrue);
+    });
+
+    test('后台 isolate 结果与同步解析一致，XML 与内嵌 JSON 可继续专注', () async {
+      final background = await parseMessageInBackground(big);
+      final sync = parseMessage(big);
+      expect(background.format, 'json');
+      expect(background.source, big);
+      expect(background.root.value, sync.root.value);
+      final xml = searchMessage(background.root, key: 'xml').single;
+      final xmlDoc = parseMessage(xml.focusValue);
+      expect(xmlDoc.format, 'xml');
+      expect(searchMessage(xmlDoc.root, key: '@a').single.value, '1');
+      // 跨 isolate 传回的 XML 文档仍可在主线程继续解析与专注。
+      final remoteXml = await parseMessageInBackground(
+        '<root a="1">${'<item>甲</item>' * 20000}</root>',
+      );
+      expect(remoteXml.format, 'xml');
+      expect(searchMessage(remoteXml.root, key: 'item').length, 20000);
+      final inner = searchMessage(background.root, key: 'inner').single;
+      expect(
+        searchMessage(
+          parseMessage(inner.focusValue).root,
+          key: 'deep',
+        ).single.value,
+        '内层',
+      );
+    });
+
+    test('后台解析保留畸形 JSON 修复与显式格式错误', () async {
+      final broken =
+          '{"reqData":"{"woInfo":{"loginNo":"DEMO1"}}","pad":"${'x' * 200000}"}';
+      final repaired = await parseMessageInBackground(broken);
+      expect(repaired.format, 'json');
+      expect(repaired.source, broken);
+      final failed = await parseMessageInBackground(
+        '<${'x' * 200000}',
+        mode: 'xml',
+      );
+      expect(failed.format, 'text');
+      expect(failed.error, contains('XML 解析失败'));
+    });
+
+    test('专注结构化节点时原文按需生成，子节点缓存复用', () {
+      final doc = parseMessage(big);
+      final list = searchMessage(doc.root, key: 'list').single;
+      final focused = parseMessage(list.focusValue);
+      expect(focused.format, 'json');
+      // 子节点只生成一次，字段树重复读取不再重新分配。
+      expect(identical(focused.root.children, focused.root.children), isTrue);
+      expect(focused.root.isBranch, isTrue);
+      expect(focused.root.children, hasLength(4000));
+      expect(
+        focused.source,
+        const JsonEncoder.withIndent('  ').convert(list.value),
+      );
+      expect(parseMessage(<String, Object?>{}).root.isBranch, isFalse);
+      expect(parseMessage(<Object?>[]).root.isBranch, isFalse);
+    });
+  });
 }
