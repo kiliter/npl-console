@@ -304,7 +304,10 @@ class MaintenanceController extends ChangeNotifier {
     Record body,
     int ticket, {
     bool binary = false,
+    http.Client? detached,
   }) async {
+    // 批量修复用独立连接：主界面切换查询（_start 递增代次、关闭连接）不影响它。
+    bool cancelled() => detached == null && ticket != _generation;
     if (![
       ...Category.values.map((type) => type.endpoint),
       TableKind.interResult.endpoint,
@@ -317,7 +320,7 @@ class MaintenanceController extends ChangeNotifier {
     if (signer == null && testToken == null) {
       throw const FormatException('请先在设置中导入 JKS 或 PKCS#8 私钥');
     }
-    if (ticket != _generation) throw const _Cancelled();
+    if (cancelled()) throw const _Cancelled();
     final token =
         testToken?.call() ?? signer!.token(settings.loginNo, settings.channel);
     final uri = Uri.parse(
@@ -335,7 +338,7 @@ class MaintenanceController extends ChangeNotifier {
     final elapsed = Stopwatch()..start();
     _addLog(log);
     notifyListeners();
-    final client = _client!;
+    final client = detached ?? _client!;
     try {
       final request = http.Request('POST', uri)
         ..followRedirects = false
@@ -355,16 +358,16 @@ class MaintenanceController extends ChangeNotifier {
           binary && response.statusCode >= 200 && response.statusCode < 300
           ? '二进制文件 · ${response.bodyBytes.length} 字节 · ${response.headers['content-type'] ?? '未声明类型'}'
           : utf8.decode(response.bodyBytes, allowMalformed: true);
-      if (ticket != _generation) throw const _Cancelled();
+      if (cancelled()) throw const _Cancelled();
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw FormatException('HTTP ${response.statusCode}：$endpoint，请查看接口记录');
       }
       log.state = '成功';
       return response;
     } catch (exception) {
-      log.state = ticket != _generation ? '已取消' : '失败';
+      log.state = cancelled() ? '已取消' : '失败';
       if (log.response.isEmpty) log.response = '请求未完成：${exception.runtimeType}';
-      if (ticket != _generation) throw const _Cancelled();
+      if (cancelled()) throw const _Cancelled();
       rethrow;
     } finally {
       elapsed.stop();
@@ -765,6 +768,115 @@ class MaintenanceController extends ChangeNotifier {
       if (ticket != _generation) throw const _Cancelled();
       _fail(exception);
       throw FormatException(_errorText(exception));
+    } finally {
+      elapsed.stop();
+      await _persist(log, elapsed.elapsedMilliseconds, 'multipart/form-data');
+      notifyListeners();
+    }
+  }
+
+  // ---------------- 批量修复专用（独立连接，不影响主界面状态） ----------------
+
+  void _ensureCredentials() {
+    settings.validate();
+    if (signer == null && testToken == null) {
+      throw const FormatException('请先在设置中导入 JKS 或 PKCS#8 私钥');
+    }
+  }
+
+  /// 只读：按受理流水（订单号）查询一个月的工单。
+  Future<List<Record>> batchQueryMonth(
+    String sysAccept,
+    String opMonth,
+    http.Client client,
+  ) async {
+    _ensureCredentials();
+    final response = await _networkRequest(
+      Category.work.endpoint,
+      {'sysAccept': sysAccept, 'opMonth': opMonth},
+      _generation,
+      detached: client,
+    );
+    return _decodeRecords(response.bodyBytes);
+  }
+
+  /// 只读：下载工单当前的单据 PDF（不走缓存，备份与回读必须拿到线上最新文件）。
+  Future<Uint8List> batchDownloadPdf(Record work, http.Client client) async {
+    _ensureCredentials();
+    final file = Asset.fromRecords(Category.work, [], work).single;
+    final response = await _networkRequest(
+      obsEndpoint,
+      file.obsBody(work, settings),
+      _generation,
+      binary: true,
+      detached: client,
+    );
+    if (detectType(response.bodyBytes, 'pdf') != 'pdf') {
+      throw const FormatException('OBS 返回的不是 PDF 文件');
+    }
+    return response.bodyBytes;
+  }
+
+  /// 上传目标参数（与下载读取一致）。
+  Record batchObsTarget(Record work) =>
+      Asset.fromRecords(Category.work, [], work).single.obsBody(work, settings);
+
+  /// 生产写操作：上传一份修复件（POST /test/look）。只由批量修复页在多重确认后逐个调用。
+  /// 不抛 HTTP 错误，返回状态码与响应文本交给调用方判断并写日志；网络异常照常抛出。
+  /// 接口记录只写字段参数与文件名、大小，不写文件字节与 JWT。
+  Future<({int status, String body, int ms})> batchUpload(
+    String fileName,
+    Uint8List bytes,
+    Record target,
+    http.Client client,
+  ) async {
+    if (bytes.isEmpty) throw const FormatException('文件为空，拒绝上传');
+    final bucket = '${target['bucketName'] ?? ''}'.trim(),
+        object = '${target['objectName'] ?? ''}'.trim(),
+        ext8 = '${target['ext8'] ?? '0'}'.trim();
+    if (bucket.isEmpty || object.isEmpty) {
+      throw const FormatException('OBS 桶与对象名不能为空');
+    }
+    _ensureCredentials();
+    final token =
+        testToken?.call() ?? signer!.token(settings.loginNo, settings.channel);
+    final uri = Uri.parse(
+      '${settings.baseUrl.replaceAll(RegExp(r'/+$'), '')}$obsUploadEndpoint',
+    );
+    final log = CallLog(
+      uri.toString(),
+      jsonEncode({
+        'bucketName': bucket,
+        'objectName': object,
+        'ext8': ext8,
+        'file': '$fileName（${bytes.length} 字节）',
+      }),
+      true,
+      contentType: 'multipart/form-data',
+    );
+    final elapsed = Stopwatch()..start();
+    _addLog(log);
+    notifyListeners();
+    try {
+      final request = http.MultipartRequest('POST', uri)
+        ..followRedirects = false
+        ..headers.addAll({'kkk': token, 'agAuthorization': token})
+        ..fields.addAll({'bucketName': bucket, 'objectName': object, 'ext8': ext8})
+        ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: fileName));
+      final response = await http.Response.fromStream(
+        await client.send(request),
+      ).timeout(const Duration(seconds: 60));
+      log.status = response.statusCode;
+      log.response = utf8.decode(response.bodyBytes, allowMalformed: true);
+      final ok = response.statusCode >= 200 &&
+          response.statusCode < 300 &&
+          log.response.trim() == 'true';
+      log.state = ok ? '成功' : '失败';
+      return (status: response.statusCode, body: log.response, ms: elapsed.elapsedMilliseconds);
+    } catch (exception) {
+      log.state = '失败';
+      if (log.response.isEmpty) log.response = '请求未完成：${exception.runtimeType}';
+      rethrow;
     } finally {
       elapsed.stop();
       await _persist(log, elapsed.elapsedMilliseconds, 'multipart/form-data');

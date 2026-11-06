@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io' show Platform;
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -18,6 +19,7 @@ import 'web_page.dart';
 import 'work_details.dart';
 import 'logs_dialog.dart';
 import 'pdf_editor/pdf_editor_screen.dart';
+import 'batch_repair/batch_repair_screen.dart';
 import '../core/pdf_editor/edit_session.dart';
 
 const ink = Color(0xff0f1e36),
@@ -53,6 +55,13 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
   String filter = '';
   int section = 0;
   bool editorTab = false, editorOpened = false;
+
+  /// 批量修复只在桌面端（Windows、macOS）提供。
+  bool batchTab = false, batchOpened = false;
+  static final batchAvailable = Platform.isMacOS || Platform.isWindows;
+
+  /// 单据修复与批量修复都是整页工具，顶栏与底部导航的处理相同。
+  bool get toolTab => editorTab || batchTab;
   late final editorSession = widget.editorSession ?? PdfEditSession();
   bool get mobile => isMobileWidth(MediaQuery.sizeOf(context).width);
   @override
@@ -88,6 +97,7 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
     controller: c,
     session: editorSession,
   );
+  late final Widget batchScreen = BatchRepairScreen(controller: c);
 
   /// 工单的小写 JSON 文本，用于结果筛选；工单记录查询后不再修改，可安全缓存。
   static final _searchTexts = Expando<String>('workSearchText');
@@ -384,7 +394,7 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
     },
     child: Focus(
       child: Scaffold(
-        bottomNavigationBar: !editorTab && mobile && c.work != null
+        bottomNavigationBar: !toolTab && mobile && c.work != null
             ? NavigationBar(
                 height: 66,
                 selectedIndex: section,
@@ -402,11 +412,11 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
         body: SafeArea(
           child: Column(
             children: [
-              if (editorTab && MediaQuery.sizeOf(context).width < 1150)
+              if (toolTab && MediaQuery.sizeOf(context).width < 1150)
                 editorHeader()
               else
                 header(),
-              if (!editorTab && MediaQuery.sizeOf(context).width < 1150)
+              if (!toolTab && MediaQuery.sizeOf(context).width < 1150)
                 Container(
                   decoration: const BoxDecoration(
                     color: Colors.white,
@@ -419,7 +429,7 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
                   child: Row(children: [modeSwitch()]),
                 ),
               // 状态行移动端独立成行；桌面端已并入顶栏，仅保留查询进度条。
-              if (mobile && !editorTab) status(),
+              if (mobile && !toolTab) status(),
               if (!mobile)
                 watch(
                   () => (c.querying, c.completed, c.total),
@@ -432,17 +442,25 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
                 ),
               Expanded(
                 child: IndexedStack(
-                  index: editorTab ? 1 : 0,
+                  index: batchTab
+                      ? 2
+                      : editorTab
+                      ? 1
+                      : 0,
                   // IndexedStack 会保持隐藏页的动画继续运行（Visibility.maintain），
                   // 单据修复页的连线流动动画在后台仍会逐帧重绘；隐藏页暂停 Ticker。
                   children: [
                     TickerMode(
-                      enabled: !editorTab,
+                      enabled: !toolTab,
                       child: mobile ? mobileBody() : desktopBody(),
                     ),
                     TickerMode(
                       enabled: editorTab,
                       child: editorOpened ? editorScreen : const SizedBox(),
+                    ),
+                    TickerMode(
+                      enabled: batchTab,
+                      child: batchOpened ? batchScreen : const SizedBox(),
                     ),
                   ],
                 ),
@@ -463,26 +481,35 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
     child: Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        tab('工单查询', false, Icons.search),
+        tab('工单查询', 0, Icons.search),
         const SizedBox(width: 2),
-        tab('单据图片修复', true, Icons.edit_document),
+        tab('单据图片修复', 1, Icons.edit_document),
+        if (batchAvailable) ...[
+          const SizedBox(width: 2),
+          tab('批量修复', 2, Icons.auto_fix_high),
+        ],
       ],
     ),
   );
 
-  Widget tab(String label, bool editor, IconData icon) {
-    final active = editorTab == editor;
+  Widget tab(String label, int mode, IconData icon) {
+    final editor = mode == 1;
+    final active = (batchTab ? 2 : editorTab ? 1 : 0) == mode;
     return Material(
       color: active ? Colors.white : Colors.transparent,
       borderRadius: BorderRadius.circular(7),
       elevation: active ? 1 : 0,
       shadowColor: const Color(0x260f1e36),
       child: InkWell(
-        key: ValueKey(editor ? 'online-editor-tab' : 'work-query-tab'),
+        key: ValueKey(
+          ['work-query-tab', 'online-editor-tab', 'batch-repair-tab'][mode],
+        ),
         borderRadius: BorderRadius.circular(7),
         onTap: () => setState(() {
           editorTab = editor;
           editorOpened |= editor;
+          batchTab = mode == 2;
+          batchOpened |= batchTab;
         }),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -537,7 +564,7 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
         if (mobile)
           IconButton(
             tooltip: '返回工单查询',
-            onPressed: () => setState(() => editorTab = false),
+            onPressed: () => setState(() => editorTab = batchTab = false),
             icon: const Icon(Icons.arrow_back_ios_new, size: 19),
           )
         else
@@ -693,10 +720,12 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
           if (!mobile) ...[
             if (wideDesktop)
               Expanded(
-                child: editorTab
+                child: toolTab
                     ? Align(
                         alignment: Alignment.centerLeft,
-                        child: editorStatusInline(),
+                        child: editorTab
+                            ? editorStatusInline()
+                            : const SizedBox.shrink(),
                       )
                     : Row(
                         children: [
@@ -1309,6 +1338,7 @@ class _MaintenanceScreenState extends State<MaintenanceScreen> {
                   onPressed: () => setState(() {
                     editorTab = true;
                     editorOpened = true;
+                    batchTab = false;
                   }),
                   style: TextButton.styleFrom(
                     foregroundColor: blue,

@@ -17,6 +17,8 @@ import 'page_kind.dart';
 
 export 'page_kind.dart' show PdfPageKind;
 
+part 'pdf_engine_batch.dart';
+
 enum PdfObjectKind { text, image }
 
 /// 预览、暂存、删除和导出使用同一归一化坐标容差。
