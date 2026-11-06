@@ -25,17 +25,27 @@ class ImageGallery extends StatelessWidget {
       return Column(
         children: [
           Container(
-            height: 48,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            color: Colors.white,
+            height: 46,
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            decoration: const BoxDecoration(
+              color: Color(0xfff5f8fc),
+              border: Border(bottom: BorderSide(color: Color(0xffdde6f1))),
+            ),
             child: Row(
               children: [
+                const Icon(
+                  Icons.collections_outlined,
+                  size: 16,
+                  color: Color(0xff2563eb),
+                ),
+                const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     '全部影像 · ${items.length} 份',
                     style: const TextStyle(
                       fontSize: 12,
-                      color: Color(0xff8392a8),
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xff4a5d78),
                     ),
                   ),
                 ),
@@ -102,13 +112,24 @@ class ImageGallery extends StatelessWidget {
     clipBehavior: Clip.antiAlias,
     decoration: BoxDecoration(
       color: Colors.white,
-      borderRadius: BorderRadius.circular(10),
-      border: Border.all(color: const Color(0xffdfe7f2)),
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: const Color(0xffdde6f1)),
+      boxShadow: const [
+        BoxShadow(
+          color: Color(0x070f1e36),
+          blurRadius: 10,
+          offset: Offset(0, 3),
+        ),
+      ],
     ),
     child: Column(
       children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          decoration: const BoxDecoration(
+            color: Color(0xfff5f8fc),
+            border: Border(bottom: BorderSide(color: Color(0xffdde6f1))),
+          ),
           child: Row(
             children: [
               Expanded(
@@ -117,8 +138,9 @@ class ImageGallery extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
-                    fontWeight: FontWeight.w600,
+                    fontWeight: FontWeight.w700,
                     fontSize: 12,
+                    color: Color(0xff0f1e36),
                   ),
                 ),
               ),
@@ -178,13 +200,22 @@ class ImageGallery extends StatelessWidget {
                   ),
                 ),
         ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: const BoxDecoration(
+            color: Color(0xfff5f8fc),
+            border: Border(top: BorderSide(color: Color(0xffecf1f8))),
+          ),
           child: Text(
             item.asset.name,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 10, color: Color(0xff8392a8)),
+            style: const TextStyle(
+              fontFamily: 'Menlo',
+              fontSize: 10.5,
+              color: Color(0xff7f91ab),
+            ),
           ),
         ),
       ],

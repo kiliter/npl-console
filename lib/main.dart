@@ -111,16 +111,44 @@ class _MaintenanceAppState extends State<MaintenanceApp>
     theme: ThemeData(
       useMaterial3: true,
       colorScheme: ColorScheme.fromSeed(
-        seedColor: const Color(0xff2869e8),
+        seedColor: const Color(0xff2563eb),
         surface: Colors.white,
+        onSurface: const Color(0xff0f1e36),
         secondaryContainer: const Color(0xffeaf2ff),
-        onSecondaryContainer: const Color(0xff2869e8),
-        primary: const Color(0xff2869e8),
+        onSecondaryContainer: const Color(0xff2563eb),
+        primary: const Color(0xff2563eb),
+        outline: const Color(0xffdde6f1),
+        outlineVariant: const Color(0xffecf1f8),
       ),
-      scaffoldBackgroundColor: const Color(0xfff3f6fa),
+      scaffoldBackgroundColor: const Color(0xffedf2f8),
       fontFamily: '.AppleSystemUIFont',
+      dialogTheme: DialogThemeData(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        elevation: 8,
+        shadowColor: const Color(0x240f1e36),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: Color(0xffdde6f1)),
+        ),
+        titleTextStyle: const TextStyle(
+          fontSize: 18,
+          fontWeight: FontWeight.w700,
+          color: Color(0xff0f1e36),
+        ),
+      ),
+      bottomSheetTheme: const BottomSheetThemeData(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+        ),
+      ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
+          backgroundColor: const Color(0xff2563eb),
+          foregroundColor: Colors.white,
+          elevation: 0,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(10),
           ),
@@ -128,10 +156,12 @@ class _MaintenanceAppState extends State<MaintenanceApp>
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
+          foregroundColor: const Color(0xff0f1e36),
+          backgroundColor: Colors.white,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(10),
           ),
-          side: const BorderSide(color: Color(0xffdfe6f0)),
+          side: const BorderSide(color: Color(0xffdde6f1)),
         ),
       ),
       segmentedButtonTheme: SegmentedButtonThemeData(
@@ -139,16 +169,20 @@ class _MaintenanceAppState extends State<MaintenanceApp>
           shape: WidgetStatePropertyAll(
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           ),
+          side: const WidgetStatePropertyAll(
+            BorderSide(color: Color(0xffdde6f1)),
+          ),
         ),
       ),
       navigationBarTheme: const NavigationBarThemeData(
         backgroundColor: Colors.white,
-        indicatorColor: Color(0xffebf2ff),
+        surfaceTintColor: Colors.transparent,
+        indicatorColor: Color(0xffeaf2ff),
       ),
-      dividerColor: const Color(0xffe5ebf4),
+      dividerColor: const Color(0xffdde6f1),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: const Color(0xfff6f8fc),
+        fillColor: const Color(0xfff4f7fb),
         isDense: true,
         contentPadding: const EdgeInsets.symmetric(
           horizontal: 14,
@@ -156,11 +190,15 @@ class _MaintenanceAppState extends State<MaintenanceApp>
         ),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: Color(0xffe2e9f3)),
+          borderSide: const BorderSide(color: Color(0xffdde6f1)),
         ),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: Color(0xffe2e9f3)),
+          borderSide: const BorderSide(color: Color(0xffdde6f1)),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: Color(0xff2563eb), width: 1.4),
         ),
       ),
     ),

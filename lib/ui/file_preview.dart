@@ -24,10 +24,19 @@ Future<void> openPreviewFullscreen(
       child: Focus(
         autofocus: true,
         child: Scaffold(
-          backgroundColor: const Color(0xfff1f5fb),
+          backgroundColor: const Color(0xffedf2f8),
           appBar: AppBar(
             automaticallyImplyLeading: false,
-            title: Text(title, style: const TextStyle(fontSize: 16)),
+            backgroundColor: Colors.white,
+            surfaceTintColor: Colors.transparent,
+            title: Text(
+              title,
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: Color(0xff0f1e36),
+              ),
+            ),
             actions: [
               TextButton.icon(
                 onPressed: () => Navigator.pop(context),
@@ -103,11 +112,24 @@ class _FilePreviewState extends State<FilePreview> {
   Widget _preview() => Column(
     children: [
       Container(
-        height: 48,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        color: Colors.white,
+        height: 46,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        decoration: const BoxDecoration(
+          color: Color(0xfff5f8fc),
+          border: Border(bottom: BorderSide(color: Color(0xffdde6f1))),
+        ),
         child: Row(
           children: [
+            Icon(
+              widget.type == 'pdf'
+                  ? Icons.picture_as_pdf_outlined
+                  : widget.type == 'image'
+                  ? Icons.image_outlined
+                  : Icons.code,
+              size: 16,
+              color: const Color(0xff2563eb),
+            ),
+            const SizedBox(width: 8),
             Expanded(
               child: Text(
                 widget.type == 'pdf'
@@ -117,7 +139,11 @@ class _FilePreviewState extends State<FilePreview> {
                     : '完整文本 · 滚动阅读',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Color(0xff8392a8), fontSize: 12),
+                style: const TextStyle(
+                  color: Color(0xff4a5d78),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
             if (widget.onRefresh != null)

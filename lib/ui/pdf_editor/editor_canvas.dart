@@ -365,7 +365,7 @@ class _EditorCanvasState extends State<EditorCanvas> {
 
   @override
   Widget build(BuildContext context) => ColoredBox(
-    color: const Color(0xffe9eef5),
+    color: const Color(0xffdfe7f1),
     child: LayoutBuilder(
       builder: (context, constraints) {
         final viewportWidth = constraints.maxWidth;
@@ -587,10 +587,11 @@ class _EditorCanvasState extends State<EditorCanvas> {
                         width: 42,
                         decoration: BoxDecoration(
                           color: Colors.white,
+                          borderRadius: BorderRadius.circular(4),
                           border: Border.all(
                             color: current == index
-                                ? const Color(0xff2869e8)
-                                : const Color(0xffdce4ef),
+                                ? const Color(0xff2563eb)
+                                : const Color(0xffdde6f1),
                             width: current == index ? 2 : 1,
                           ),
                         ),

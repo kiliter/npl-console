@@ -400,19 +400,80 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          color: Colors.white,
-          child: Text(
-            '${source ? '旧单据 · 选择图片' : '新单据 · 修复预览'}${doc == null ? '' : '  ${doc.caseNo}'}',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontWeight: FontWeight.w600),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            border: Border(bottom: BorderSide(color: Color(0xffdde6f1))),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: source
+                      ? const Color(0xff2563eb)
+                      : const Color(0xff10b981),
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 7),
+              Expanded(
+                child: Text(
+                  '${source ? '旧单据 · 选择图片' : '新单据 · 修复预览'}${doc == null ? '' : '  ${doc.caseNo}'}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12.5,
+                    color: Color(0xff0f1e36),
+                  ),
+                ),
+              ),
+              // 待应用状态不切换 busy、不重建画布，单独监听。
+              if (doc != null)
+                watch(
+                  () => (session.needsSync, doc.snapshot.pageCount),
+                  () => Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 7,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: !source && session.needsSync
+                          ? const Color(0xfffef5e7)
+                          : const Color(0xfff4f7fb),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                        color: !source && session.needsSync
+                            ? const Color(0xfff8d8a5)
+                            : const Color(0xffdde6f1),
+                      ),
+                    ),
+                    child: Text(
+                      !source && session.needsSync
+                          ? '• 实时预览 · 待应用'
+                          : '共 ${doc.snapshot.pageCount} 页',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        color: !source && session.needsSync
+                            ? const Color(0xffc66908)
+                            : const Color(0xff7f91ab),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
           ),
         ),
         Expanded(
           child: doc == null
               ? Center(
-                  child: Text(source ? '加载后，选择需要同步的旧单据图片' : '加入共享区后，在这里实时预览'),
+                  child: Text(
+                    source ? '加载后，选择需要同步的旧单据图片' : '加入共享区后，在这里实时预览',
+                    style: const TextStyle(color: Color(0xff7f91ab)),
+                  ),
                 )
               : EditorCanvas(
                   key: ValueKey(source ? 'source-canvas' : 'target-canvas'),
@@ -450,7 +511,7 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
       decoration: const BoxDecoration(
         color: Colors.white,
         border: Border.symmetric(
-          vertical: BorderSide(color: Color(0xffe0e7f0)),
+          vertical: BorderSide(color: Color(0xffdde6f1)),
         ),
       ),
       padding: const EdgeInsets.all(8),
@@ -462,18 +523,19 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
               const Icon(
                 Icons.collections_outlined,
                 size: 15,
-                color: Color(0xff52647c),
+                color: Color(0xff2563eb),
               ),
               const SizedBox(width: 5),
               Text(
                 '共享区 ${session.materials.length}',
                 style: const TextStyle(
                   fontSize: 12,
-                  fontWeight: FontWeight.w600,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xff0f1e36),
                 ),
               ),
               const Spacer(),
-              const Icon(Icons.bolt, size: 14, color: Color(0xff1a8b72)),
+              const Icon(Icons.bolt, size: 14, color: Color(0xff0d8a6a)),
             ],
           ),
           const SizedBox(height: 6),
@@ -483,7 +545,7 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
                     child: Text(
                       '选图或导入后实时预览',
                       textAlign: TextAlign.center,
-                      style: TextStyle(color: Color(0xff728198), fontSize: 11),
+                      style: TextStyle(color: Color(0xff7f91ab), fontSize: 11),
                     ),
                   )
                 : GridView.builder(
@@ -507,22 +569,22 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
                           session.targetPage(image) >=
                           (session.target?.snapshot.pageCount ?? 0);
                       final color = image.staged
-                          ? const Color(0xff7854aa)
+                          ? const Color(0xff7c3aed)
                           : image.local
-                          ? const Color(0xffaa6216)
-                          : const Color(0xff2869e8);
+                          ? const Color(0xffc66908)
+                          : const Color(0xff2563eb);
                       final card = Tooltip(
                         message: image.staged
                             ? '暂存图片：拖到右侧页面放置，拖到页面外不改变位置'
                             : '${image.source}${missing ? ' · 新单据暂无对应页' : ''}',
                         child: Container(
                           decoration: BoxDecoration(
-                            color: const Color(0xfff6f8fb),
-                            borderRadius: BorderRadius.circular(6),
+                            color: const Color(0xfff5f8fc),
+                            borderRadius: BorderRadius.circular(8),
                             border: Border.all(
                               color: missing
-                                  ? const Color(0xffe8b972)
-                                  : const Color(0xffe4eaf2),
+                                  ? const Color(0xfff8d8a5)
+                                  : const Color(0xffdde6f1),
                             ),
                           ),
                           child: Column(
@@ -568,9 +630,9 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
                                   vertical: 2,
                                 ),
                                 decoration: BoxDecoration(
-                                  color: color.withValues(alpha: .08),
+                                  color: color.withValues(alpha: .1),
                                   borderRadius: const BorderRadius.vertical(
-                                    bottom: Radius.circular(5),
+                                    bottom: Radius.circular(7),
                                   ),
                                 ),
                                 child: Text(
@@ -583,7 +645,11 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
                                       : '旧图 · ${image.page}页${missing ? ' 缺页' : ''}',
                                   textAlign: TextAlign.center,
                                   maxLines: 1,
-                                  style: TextStyle(fontSize: 10, color: color),
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w600,
+                                    color: color,
+                                  ),
                                 ),
                               ),
                             ],
@@ -628,6 +694,159 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
     ),
   );
 
+  Widget _inputPill({
+    required bool source,
+    required TextEditingController controller,
+    required bool compact,
+    ValueChanged<String>? onSubmitted,
+  }) => Container(
+    padding: const EdgeInsets.fromLTRB(6, 2, 10, 2),
+    decoration: BoxDecoration(
+      color: const Color(0xfff4f7fb),
+      borderRadius: BorderRadius.circular(9),
+      border: Border.all(color: const Color(0xffdde6f1)),
+    ),
+    child: Row(
+      children: [
+        if (!compact) ...[
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+            decoration: BoxDecoration(
+              color: source ? const Color(0xffeaf2ff) : const Color(0xffe6f7f2),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Text(
+              source ? '来源' : '目标',
+              style: TextStyle(
+                fontSize: 10.5,
+                fontWeight: FontWeight.w700,
+                color: source
+                    ? const Color(0xff2563eb)
+                    : const Color(0xff0d8a6a),
+              ),
+            ),
+          ),
+          const SizedBox(width: 7),
+        ],
+        Expanded(
+          child: TextField(
+            controller: controller,
+            enabled: !busy,
+            onSubmitted: onSubmitted,
+            style: const TextStyle(
+              fontFamily: 'Menlo',
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: Color(0xff0f1e36),
+            ),
+            decoration: InputDecoration(
+              labelText: source ? '旧单据号' : '新单据号',
+              floatingLabelStyle: const TextStyle(
+                fontSize: 10,
+                color: Color(0xff7f91ab),
+              ),
+              isDense: true,
+              filled: false,
+              border: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              focusedBorder: InputBorder.none,
+              disabledBorder: InputBorder.none,
+              contentPadding: const EdgeInsets.symmetric(vertical: 4),
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+
+  Widget _actionButtons() => Wrap(
+    spacing: 8,
+    runSpacing: 4,
+    crossAxisAlignment: WrapCrossAlignment.center,
+    children: [
+      OutlinedButton(
+        onPressed: busy ? null : load,
+        child: Text(loading ? '加载中…' : '加载单据'),
+      ),
+      ValueListenableBuilder<Map<String, RepairSelection>>(
+        valueListenable: selection,
+        builder: (context, selected, _) => OutlinedButton(
+          onPressed: busy || selected.isEmpty ? null : collect,
+          child: Text(selected.isEmpty ? '加入共享区' : '加入共享区（${selected.length}）'),
+        ),
+      ),
+      OutlinedButton.icon(
+        onPressed: busy || session.target == null ? null : importImage,
+        icon: const Icon(Icons.add_photo_alternate_outlined, size: 16),
+        label: const Text('导入本地图片'),
+      ),
+      FilledButton(
+        onPressed: busy || session.target == null || !session.needsSync
+            ? null
+            : synchronize,
+        child: const Text('应用'),
+      ),
+      OutlinedButton.icon(
+        onPressed: busy || session.target?.edited != true || session.needsSync
+            ? null
+            : save,
+        icon: const Icon(Icons.save_alt, size: 16),
+        label: Text(saving ? '保存中…' : '保存到本地'),
+      ),
+      zoomControls(),
+    ],
+  );
+
+  Widget _legendTooltipIcon() => Tooltip(
+    message: '连线颜色图例：\n• 蓝色：旧单据图片同步\n• 紫色：右侧页面暂存\n• 琥珀：本地图片导入',
+    waitDuration: const Duration(milliseconds: 150),
+    child: Container(
+      height: 30,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xfff4f7fb),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xffdde6f1)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final c in const [
+            Color(0xff2563eb),
+            Color(0xff7c3aed),
+            Color(0xffc66908),
+          ])
+            Container(
+              width: 6,
+              height: 6,
+              margin: const EdgeInsets.symmetric(horizontal: 2),
+              decoration: BoxDecoration(color: c, shape: BoxShape.circle),
+            ),
+        ],
+      ),
+    ),
+  );
+
+  Widget _helpTooltipIcon() => Tooltip(
+    message:
+        '操作说明：\n• 按住 Ctrl / ⌘ 多选加入共享区，按当前页序实时预览\n• 右键可镜像、复制或删除图片，点击「应用」后保存\n• Ctrl / ⌘ + 滚轮缩放，两侧同步滚动',
+    waitDuration: const Duration(milliseconds: 150),
+    child: Container(
+      width: 30,
+      height: 30,
+      decoration: BoxDecoration(
+        color: const Color(0xfff4f7fb),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xffdde6f1)),
+      ),
+      child: const Icon(
+        Icons.help_outline_rounded,
+        size: 16,
+        color: Color(0xff4a5d78),
+      ),
+    ),
+  );
+
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
@@ -637,8 +856,20 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
         enabled: !compact,
         child: Column(
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+            Container(
+              margin: compact
+                  ? EdgeInsets.zero
+                  : const EdgeInsets.fromLTRB(12, 8, 12, 6),
+              padding: compact
+                  ? const EdgeInsets.fromLTRB(12, 8, 12, 6)
+                  : const EdgeInsets.fromLTRB(12, 9, 12, 8),
+              decoration: compact
+                  ? null
+                  : BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xffdde6f1)),
+                    ),
               child: Column(
                 children: [
                   watch(
@@ -646,103 +877,47 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
                     () => Row(
                       children: [
                         Expanded(
-                          child: TextField(
+                          child: _inputPill(
+                            source: true,
                             controller: oldNo,
-                            enabled: !busy,
-                            decoration: const InputDecoration(
-                              labelText: '旧单据号',
-                              isDense: true,
-                            ),
+                            compact: compact,
                           ),
                         ),
                         const Padding(
                           padding: EdgeInsets.symmetric(horizontal: 8),
-                          child: Icon(Icons.arrow_forward, size: 18),
+                          child: Icon(
+                            Icons.arrow_forward,
+                            size: 17,
+                            color: Color(0xff7f91ab),
+                          ),
                         ),
                         Expanded(
-                          child: TextField(
+                          child: _inputPill(
+                            source: false,
                             controller: newNo,
-                            enabled: !busy,
+                            compact: compact,
                             onSubmitted: (_) => load(),
-                            decoration: const InputDecoration(
-                              labelText: '新单据号',
-                              isDense: true,
-                            ),
                           ),
                         ),
+                        const SizedBox(width: 8),
+                        _legendTooltipIcon(),
+                        const SizedBox(width: 6),
+                        _helpTooltipIcon(),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  watch(
-                    () => (
-                      busy,
-                      session.target,
-                      session.target?.bytes,
-                      session.target?.saved,
-                      session.needsSync,
-                    ),
-                    () => Wrap(
-                      spacing: 8,
-                      runSpacing: 4,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      children: [
-                        OutlinedButton(
-                          onPressed: busy ? null : load,
-                          child: Text(loading ? '加载中…' : '加载单据'),
-                        ),
-                        ValueListenableBuilder<Map<String, RepairSelection>>(
-                          valueListenable: selection,
-                          builder: (context, selected, _) => OutlinedButton(
-                            onPressed: busy || selected.isEmpty
-                                ? null
-                                : collect,
-                            child: Text(
-                              selected.isEmpty
-                                  ? '加入共享区'
-                                  : '加入共享区（${selected.length}）',
-                            ),
-                          ),
-                        ),
-                        OutlinedButton.icon(
-                          onPressed: busy || session.target == null
-                              ? null
-                              : importImage,
-                          icon: const Icon(
-                            Icons.add_photo_alternate_outlined,
-                            size: 16,
-                          ),
-                          label: const Text('导入本地图片'),
-                        ),
-                        FilledButton(
-                          onPressed:
-                              busy ||
-                                  session.target == null ||
-                                  !session.needsSync
-                              ? null
-                              : synchronize,
-                          child: const Text('应用'),
-                        ),
-                        OutlinedButton.icon(
-                          onPressed:
-                              busy ||
-                                  session.target?.edited != true ||
-                                  session.needsSync
-                              ? null
-                              : save,
-                          icon: const Icon(Icons.save_alt, size: 16),
-                          label: Text(saving ? '保存中…' : '保存到本地'),
-                        ),
-                        zoomControls(),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 5),
-                  const Align(
+                  const SizedBox(height: 6),
+                  Align(
                     alignment: Alignment.centerLeft,
-                    child: Text(
-                      '按住 Ctrl / ⌘ 多选加入共享区；按当前页序实时预览。右键可镜像、复制或删除图片，点击应用后保存。Ctrl / ⌘ + 滚轮缩放，两侧同步滚动。',
-                      style: TextStyle(fontSize: 12, color: Color(0xff52647c)),
+                    child: watch(
+                      () => (
+                        busy,
+                        session.target,
+                        session.target?.bytes,
+                        session.target?.saved,
+                        session.needsSync,
+                      ),
+                      () => _actionButtons(),
                     ),
                   ),
                 ],
@@ -766,15 +941,16 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
                         vertical: 5,
                       ),
                       decoration: BoxDecoration(
-                        color: const Color(0xfffff4df),
-                        borderRadius: BorderRadius.circular(6),
+                        color: const Color(0xfffef5e7),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xfff8d8a5)),
                       ),
                       child: Row(
                         children: [
                           const Icon(
                             Icons.info_outline,
                             size: 16,
-                            color: Color(0xff9d6b19),
+                            color: Color(0xffc66908),
                           ),
                           const SizedBox(width: 6),
                           Expanded(
@@ -784,7 +960,8 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
                                 fontSize: 11,
-                                color: Color(0xff8a5c12),
+                                fontWeight: FontWeight.w500,
+                                color: Color(0xffc66908),
                               ),
                             ),
                           ),

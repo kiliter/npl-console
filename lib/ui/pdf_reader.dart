@@ -89,11 +89,11 @@ class _PdfReaderState extends State<PdfReader> {
         return const Center(child: Text('PDF 加载失败，请查看接口记录中的日志文件'));
       },
       margin: 18,
-      backgroundColor: const Color(0xffe9eef5),
+      backgroundColor: const Color(0xffdfe7f1),
       pageDropShadow: const BoxShadow(
-        color: Color(0x26324761),
-        blurRadius: 10,
-        offset: Offset(0, 4),
+        color: Color(0x280f1e36),
+        blurRadius: 16,
+        offset: Offset(0, 6),
       ),
       // 右侧可拖拽滚动条：长文档可直接拖到末尾，并显示当前页码。
       viewerOverlayBuilder: (context, size, handleLinkTap) => [
@@ -103,7 +103,7 @@ class _PdfReaderState extends State<PdfReader> {
           margin: 4,
           thumbBuilder: (context, thumbSize, pageNumber, _) => Container(
             decoration: BoxDecoration(
-              color: const Color(0xff3b5878),
+              color: const Color(0xff2563eb),
               borderRadius: BorderRadius.circular(11),
             ),
             alignment: Alignment.center,
@@ -273,24 +273,33 @@ class _PdfReaderState extends State<PdfReader> {
               children: [
                 if (showThumbs && document != null)
                   Container(
-                    width: size.maxWidth < 500 ? 76 : 106,
-                    color: const Color(0xffe8edf4),
+                    width: size.maxWidth < 500 ? 76 : 108,
+                    decoration: const BoxDecoration(
+                      color: Color(0xfff5f8fc),
+                      border: Border(
+                        right: BorderSide(color: Color(0xffdde6f1)),
+                      ),
+                    ),
                     child: ListView.builder(
                       itemCount: document!.pages.length,
                       padding: const EdgeInsets.all(8),
                       itemBuilder: (context, index) => InkWell(
+                        borderRadius: BorderRadius.circular(7),
                         onTap: () => controller.goToPage(pageNumber: index + 1),
                         child: Container(
-                          margin: const EdgeInsets.only(bottom: 14),
-                          padding: const EdgeInsets.all(4),
+                          margin: const EdgeInsets.only(bottom: 12),
+                          padding: const EdgeInsets.all(5),
                           decoration: BoxDecoration(
+                            color: page == index + 1
+                                ? const Color(0xffeaf2ff)
+                                : Colors.white,
                             border: Border.all(
                               color: page == index + 1
-                                  ? const Color(0xff2869e8)
-                                  : Colors.transparent,
-                              width: 2,
+                                  ? const Color(0xff2563eb)
+                                  : const Color(0xffdde6f1),
+                              width: page == index + 1 ? 1.8 : 1,
                             ),
-                            borderRadius: BorderRadius.circular(5),
+                            borderRadius: BorderRadius.circular(7),
                           ),
                           child: Column(
                             children: [
@@ -307,7 +316,16 @@ class _PdfReaderState extends State<PdfReader> {
                               const SizedBox(height: 5),
                               Text(
                                 '${index + 1}',
-                                style: const TextStyle(fontSize: 10),
+                                style: TextStyle(
+                                  fontFamily: 'Menlo',
+                                  fontSize: 10.5,
+                                  fontWeight: page == index + 1
+                                      ? FontWeight.w700
+                                      : FontWeight.w500,
+                                  color: page == index + 1
+                                      ? const Color(0xff2563eb)
+                                      : const Color(0xff7f91ab),
+                                ),
                               ),
                             ],
                           ),
@@ -321,11 +339,14 @@ class _PdfReaderState extends State<PdfReader> {
           ),
           Container(
             height: 28,
-            color: const Color(0xfff7f9fc),
+            decoration: const BoxDecoration(
+              color: Color(0xfff5f8fc),
+              border: Border(top: BorderSide(color: Color(0xffdde6f1))),
+            ),
             alignment: Alignment.center,
             child: const Text(
               '连续阅读 · 滚动浏览全部页面 · 双指缩放',
-              style: TextStyle(fontSize: 10, color: Color(0xff8192a9)),
+              style: TextStyle(fontSize: 10.5, color: Color(0xff7f91ab)),
             ),
           ),
         ],

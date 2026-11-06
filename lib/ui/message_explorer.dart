@@ -261,7 +261,10 @@ class _MessageExplorerState extends State<MessageExplorer> {
         children: [
           Container(
             width: double.infinity,
-            color: Colors.white,
+            decoration: const BoxDecoration(
+              color: Color(0xfff5f8fc),
+              border: Border(bottom: BorderSide(color: Color(0xffdde6f1))),
+            ),
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
@@ -269,8 +272,8 @@ class _MessageExplorerState extends State<MessageExplorer> {
                 children: [
                   const Icon(
                     Icons.account_tree_outlined,
-                    size: 17,
-                    color: Color(0xff8192a9),
+                    size: 16,
+                    color: Color(0xff2563eb),
                   ),
                   const SizedBox(width: 6),
                   for (var i = 0; i < frames.length; i++) ...[
@@ -278,11 +281,40 @@ class _MessageExplorerState extends State<MessageExplorer> {
                       const Icon(
                         Icons.chevron_right,
                         size: 15,
-                        color: Color(0xff8192a9),
+                        color: Color(0xff7f91ab),
                       ),
                     TextButton(
                       onPressed: i < frames.length - 1 ? () => _back(i) : null,
-                      child: Text(frames[i].name),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        backgroundColor: i == frames.length - 1
+                            ? const Color(0xffeaf2ff)
+                            : Colors.white,
+                        foregroundColor: i == frames.length - 1
+                            ? const Color(0xff2563eb)
+                            : const Color(0xff4a5d78),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(999),
+                          side: BorderSide(
+                            color: i == frames.length - 1
+                                ? const Color(0xffbfd6ff)
+                                : const Color(0xffdde6f1),
+                          ),
+                        ),
+                      ),
+                      child: Text(
+                        frames[i].name,
+                        style: const TextStyle(
+                          fontFamily: 'Menlo',
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                     ),
                   ],
                 ],
@@ -502,7 +534,7 @@ class _MessageExplorerState extends State<MessageExplorer> {
                       : !collapsed.contains(node.path);
               return Container(
                 decoration: const BoxDecoration(
-                  border: Border(bottom: BorderSide(color: Color(0xffedf1f6))),
+                  border: Border(bottom: BorderSide(color: Color(0xffecf1f8))),
                 ),
                 child: Padding(
                   padding: EdgeInsets.only(
@@ -549,12 +581,13 @@ class _MessageExplorerState extends State<MessageExplorer> {
                                       ? Icons.expand_more
                                       : Icons.chevron_right,
                                   size: 18,
+                                  color: const Color(0xff7f91ab),
                                 ),
                               )
                             : const Icon(
                                 Icons.circle,
                                 size: 4,
-                                color: Color(0xffa7b7cd),
+                                color: Color(0xffa6b4c8),
                               ),
                       ),
                       Expanded(
@@ -567,11 +600,16 @@ class _MessageExplorerState extends State<MessageExplorer> {
                                   TextSpan(
                                     text: '${node.name}  ',
                                     style: const TextStyle(
-                                      color: Color(0xff2869e8),
+                                      color: Color(0xff2563eb),
                                       fontWeight: FontWeight.w600,
                                     ),
                                   ),
-                                  TextSpan(text: node.summary),
+                                  TextSpan(
+                                    text: node.summary,
+                                    style: const TextStyle(
+                                      color: Color(0xff0f1e36),
+                                    ),
+                                  ),
                                 ],
                               ),
                               style: const TextStyle(
@@ -586,7 +624,7 @@ class _MessageExplorerState extends State<MessageExplorer> {
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(
-                                  color: Color(0xff8b9ab0),
+                                  color: Color(0xff7f91ab),
                                   fontSize: 10,
                                 ),
                               ),
@@ -597,11 +635,35 @@ class _MessageExplorerState extends State<MessageExplorer> {
                         tooltip: '复制字段内容',
                         onPressed: () =>
                             Clipboard.setData(ClipboardData(text: node.source)),
-                        icon: const Icon(Icons.copy_outlined, size: 15),
+                        icon: const Icon(
+                          Icons.copy_outlined,
+                          size: 15,
+                          color: Color(0xff7f91ab),
+                        ),
                       ),
                       TextButton(
                         onPressed: () => _focus(node),
-                        child: const Text('专注', style: TextStyle(fontSize: 12)),
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          backgroundColor: const Color(0xffeaf2ff),
+                          foregroundColor: const Color(0xff2563eb),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(6),
+                            side: const BorderSide(color: Color(0xffbfd6ff)),
+                          ),
+                        ),
+                        child: const Text(
+                          '专注',
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                       ),
                     ],
                   ),

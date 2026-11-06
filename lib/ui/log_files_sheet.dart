@@ -137,86 +137,191 @@ class _LogFilesSheetState extends State<LogFilesSheet> {
     return '${(bytes / 1024 / 1024).toStringAsFixed(1)} MB';
   }
 
+  Widget _appSwitch() => Container(
+    padding: const EdgeInsets.all(3),
+    decoration: BoxDecoration(
+      color: const Color(0xffeaf0f8),
+      borderRadius: BorderRadius.circular(9),
+      border: Border.all(color: const Color(0xffd8e3f0)),
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (final item in LogApp.values)
+          GestureDetector(
+            onTap: downloading == null ? () => switchApp(item) : null,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 140),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+              decoration: BoxDecoration(
+                color: app == item ? Colors.white : Colors.transparent,
+                borderRadius: BorderRadius.circular(7),
+                boxShadow: app == item
+                    ? const [
+                        BoxShadow(
+                          color: Color(0x140f172a),
+                          blurRadius: 4,
+                          offset: Offset(0, 1),
+                        ),
+                      ]
+                    : null,
+              ),
+              child: Text(
+                item.label,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: app == item ? FontWeight.w700 : FontWeight.w600,
+                  color: app == item
+                      ? const Color(0xff2563eb)
+                      : const Color(0xff64748b),
+                ),
+              ),
+            ),
+          ),
+      ],
+    ),
+  );
+
   @override
   Widget build(BuildContext context) {
     final parts = dir.isEmpty ? <String>[] : dir.split('/');
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.fromLTRB(20, 14, 12, 14),
+          decoration: const BoxDecoration(
+            color: Color(0xfff5f8fc),
+            border: Border(bottom: BorderSide(color: Color(0xffdde6f1))),
+          ),
+          child: Row(
             children: [
-              const Text(
-                '日志文件',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: const Color(0xffeaf2ff),
+                  borderRadius: BorderRadius.circular(9),
+                  border: Border.all(color: const Color(0xffbfdbfe)),
+                ),
+                child: const Icon(
+                  Icons.terminal_rounded,
+                  size: 18,
+                  color: Color(0xff2563eb),
+                ),
               ),
-              const Spacer(),
-              TextButton.icon(
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '日志文件',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xff0f1e36),
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '环境：${widget.controller.settings.current.name} · 目录 /usr/local/logs · 覆盖注册中心中的全部副本',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Color(0xff64748b),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              OutlinedButton.icon(
                 onPressed: downloading == null && !loading && instances != null
                     ? openBatch
                     : null,
-                icon: const Icon(Icons.download_for_offline_outlined, size: 18),
+                icon: const Icon(Icons.download_for_offline_outlined, size: 16),
                 label: const Text('批量下载'),
+                style: OutlinedButton.styleFrom(
+                  backgroundColor: Colors.white,
+                  foregroundColor: const Color(0xff2563eb),
+                  side: const BorderSide(color: Color(0xffbfdbfe)),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  textStyle: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
               ),
+              const SizedBox(width: 4),
               IconButton(
                 tooltip: '刷新',
                 onPressed: downloading == null ? () => load(dir) : null,
-                icon: const Icon(Icons.refresh),
+                icon: const Icon(Icons.refresh, size: 18),
               ),
               IconButton(
                 tooltip: '关闭',
                 onPressed: () => Navigator.pop(context),
-                icon: const Icon(Icons.close),
+                icon: const Icon(Icons.close, size: 18),
               ),
             ],
           ),
-          Text(
-            '环境：${widget.controller.settings.current.name} · 目录 /usr/local/logs · 覆盖注册中心中的全部副本',
-            style: const TextStyle(fontSize: 12, color: Color(0xff8090a5)),
-          ),
-          const SizedBox(height: 12),
-          SegmentedButton<LogApp>(
-            segments: [
-              for (final item in LogApp.values)
-                ButtonSegment(value: item, label: Text(item.label)),
-            ],
-            selected: {app},
-            onSelectionChanged: downloading == null
-                ? (value) => switchApp(value.single)
-                : null,
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              TextButton(
-                onPressed: downloading == null ? () => load('') : null,
-                child: const Text('logs'),
-              ),
-              for (var i = 0; i < parts.length; i++) ...[
-                const Icon(Icons.chevron_right, size: 16),
-                TextButton(
-                  onPressed: downloading == null
-                      ? () => load(parts.sublist(0, i + 1).join('/'))
-                      : null,
-                  child: Text(parts[i]),
+        ),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 14, 20, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    _appSwitch(),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Wrap(
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          TextButton(
+                            onPressed: downloading == null
+                                ? () => load('')
+                                : null,
+                            child: const Text('logs'),
+                          ),
+                          for (var i = 0; i < parts.length; i++) ...[
+                            const Icon(Icons.chevron_right, size: 16),
+                            TextButton(
+                              onPressed: downloading == null
+                                  ? () =>
+                                        load(parts.sublist(0, i + 1).join('/'))
+                                  : null,
+                              child: Text(parts[i]),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
+                const SizedBox(height: 8),
+                if (downloading != null) progress(),
+                if (error != null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: SelectableText(
+                      error!,
+                      style: const TextStyle(color: Colors.red),
+                    ),
+                  ),
+                Expanded(child: body()),
               ],
-            ],
-          ),
-          if (downloading != null) progress(),
-          if (error != null)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: SelectableText(
-                error!,
-                style: const TextStyle(color: Colors.red),
-              ),
             ),
-          Expanded(child: body()),
-        ],
-      ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -250,50 +355,91 @@ class _LogFilesSheetState extends State<LogFilesSheet> {
     return ListView(
       children: [
         for (final instance in list) ...[
-          ListTile(
-            dense: true,
-            leading: Icon(
-              instance.ok ? Icons.dns_outlined : Icons.error_outline,
-              color: instance.ok ? null : Colors.red,
+          Container(
+            margin: const EdgeInsets.only(bottom: 10),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(11),
+              border: Border.all(
+                color: instance.ok
+                    ? const Color(0xffdde6f1)
+                    : const Color(0xfffecaca),
+              ),
             ),
-            title: Text(
-              instance.title,
-              style: const TextStyle(fontWeight: FontWeight.w700),
-            ),
-            subtitle: Text(
-              instance.ok
-                  ? '${instance.instance} · ${instance.entries.length} 项'
-                  : '${instance.instance} · ${instance.status} · ${instance.message}',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  decoration: BoxDecoration(
+                    color: instance.ok
+                        ? const Color(0xfff5f8fc)
+                        : const Color(0xfffef2f2),
+                    borderRadius: const BorderRadius.vertical(
+                      top: Radius.circular(10),
+                    ),
+                  ),
+                  child: ListTile(
+                    dense: true,
+                    leading: Icon(
+                      instance.ok ? Icons.dns_outlined : Icons.error_outline,
+                      color: instance.ok
+                          ? const Color(0xff0d8a6a)
+                          : const Color(0xffdc2626),
+                    ),
+                    title: Text(
+                      instance.title,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xff0f1e36),
+                      ),
+                    ),
+                    subtitle: Text(
+                      instance.ok
+                          ? '${instance.instance} · ${instance.entries.length} 项'
+                          : '${instance.instance} · ${instance.status} · ${instance.message}',
+                    ),
+                  ),
+                ),
+                if (instance.ok && instance.entries.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.only(left: 56, top: 8, bottom: 10),
+                    child: Text(
+                      '空目录',
+                      style: TextStyle(color: Color(0xff7f91ab)),
+                    ),
+                  ),
+                for (final entry in instance.entries)
+                  ListTile(
+                    dense: true,
+                    contentPadding: const EdgeInsets.only(left: 40, right: 8),
+                    leading: Icon(
+                      entry.isDir
+                          ? Icons.folder_outlined
+                          : Icons.description_outlined,
+                      color: entry.isDir
+                          ? const Color(0xff2563eb)
+                          : const Color(0xff4a5d78),
+                    ),
+                    title: Text(entry.name),
+                    subtitle: Text(
+                      entry.isDir
+                          ? entry.lastModified
+                          : '${_size(entry.size)} · ${entry.lastModified}',
+                    ),
+                    trailing: entry.isDir
+                        ? const Icon(Icons.chevron_right)
+                        : const Icon(
+                            Icons.download_outlined,
+                            color: Color(0xff2563eb),
+                          ),
+                    enabled: downloading == null,
+                    onTap: () => entry.isDir
+                        ? load(entry.path)
+                        : download(instance, entry),
+                  ),
+              ],
             ),
           ),
-          if (instance.ok && instance.entries.isEmpty)
-            const Padding(
-              padding: EdgeInsets.only(left: 56, bottom: 8),
-              child: Text('空目录', style: TextStyle(color: Color(0xff8090a5))),
-            ),
-          for (final entry in instance.entries)
-            ListTile(
-              dense: true,
-              contentPadding: const EdgeInsets.only(left: 40, right: 8),
-              leading: Icon(
-                entry.isDir
-                    ? Icons.folder_outlined
-                    : Icons.description_outlined,
-              ),
-              title: Text(entry.name),
-              subtitle: Text(
-                entry.isDir
-                    ? entry.lastModified
-                    : '${_size(entry.size)} · ${entry.lastModified}',
-              ),
-              trailing: entry.isDir
-                  ? const Icon(Icons.chevron_right)
-                  : const Icon(Icons.download_outlined),
-              enabled: downloading == null,
-              onTap: () =>
-                  entry.isDir ? load(entry.path) : download(instance, entry),
-            ),
-          const Divider(height: 1),
         ],
       ],
     );

@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="neo-cloud" data-density="standard" data-radius="balanced">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>无纸化维护中心 · NPL Console v1.6.2 高保真视觉与交互工作台</title>
+  <link rel="icon" href="app-icon.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-viewport="desktop">
+  <div class="studio-shell">
+    <!-- 顶部 UI 风格与场景实验室控制条（支持一键收起，或按 \ 键隐藏） -->
+    <header class="studio-bar" id="studio-bar" aria-label="UI 风格与高保真场景控制台">
+      <div class="studio-group">
+        <span class="studio-tag">UI 风格预设</span>
+        <div class="studio-pill-group" role="group" aria-label="主题风格">
+          <button class="studio-pill active" data-studio-theme="neo-cloud" title="现代精密蓝白工作台（默认升级风格）">澄澈云台 · Neo Cloud</button>
+          <button class="studio-pill" data-studio-theme="archival" title="温润纸张基底与朱印档案风格">瑞士档案 · Archival</button>
+          <button class="studio-pill" data-studio-theme="obsidian" title="夜间排障与日志分析高对比暗色风格">深空终端 · Obsidian</button>
+        </div>
+
+        <span class="studio-tag" style="margin-left:6px">圆角/密度</span>
+        <div class="studio-pill-group">
+          <button class="studio-pill active" data-studio-radius="balanced">现代圆角</button>
+          <button class="studio-pill" data-studio-radius="sharp">硬朗方正</button>
+        </div>
+        <div class="studio-pill-group">
+          <button class="studio-pill active" data-studio-density="standard">标准</button>
+          <button class="studio-pill" data-studio-density="compact">紧凑</button>
+        </div>
+      </div>
+
+      <div class="studio-scenes" aria-label="核心业务场景快速体验">
+        <span class="studio-tag">场景直达</span>
+        <button class="scene-btn active" data-studio-scene="details">① 单据详情</button>
+        <button class="scene-btn" data-studio-scene="pdf">② PDF 与上传修复</button>
+        <button class="scene-btn" data-studio-scene="message">③ 报文递归解析</button>
+        <button class="scene-btn" data-studio-scene="gallery">④ 签字与影像</button>
+        <button class="scene-btn" data-studio-scene="repair">⑤ 单据图片修复 (流光连线)</button>
+        <button class="scene-btn" data-studio-scene="table-sm4">⑥ 五表查询 &amp; SM4解密</button>
+        <button class="scene-btn" data-studio-scene="pod-logs">⑦ 容器日志分片下载</button>
+        <button class="scene-btn" data-studio-scene="settings">⑧ 多环境与密钥设置</button>
+      </div>
+
+      <div class="studio-group">
+        <div class="studio-pill-group" role="group" aria-label="预览设备切换">
+          <button class="studio-pill active" data-studio-viewport="desktop">桌面端</button>
+          <button class="studio-pill" data-studio-viewport="dual">双端同屏</button>
+          <button class="studio-pill" data-studio-viewport="mobile">手机端</button>
+        </div>
+        <button class="scene-btn" data-studio-action="collapse-bar" title="收起顶部风格栏，体验 100% 纯净窗口 (快捷键 \)">收起栏 ▴</button>
+      </div>
+    </header>
+
+    <!-- 主舞台：左侧/全屏主视图 + 双端模式下的右侧手机壳 -->
+    <div class="stage-container">
+      <div class="primary-stage" id="app"></div>
+      <aside class="dual-mobile-stage" aria-label="手机端同步对照预览">
+        <div class="phone-device-frame">
+          <iframe id="dual-iframe" title="手机端高保真预览"></iframe>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- 收起顶部控制栏后的右下角唤出胶囊 -->
+  <button class="studio-reopen" data-studio-action="expand-bar" title="展开 UI 风格与场景实验室 (快捷键 \)">
+    <span>✦ UI 风格与场景实验室</span>
+  </button>
+
+  <!-- 全局模态弹窗容器与轻提示 -->
+  <div id="overlay"></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

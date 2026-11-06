@@ -1206,6 +1206,41 @@ void main() {
     session.dispose();
   });
 
+  testWidgets('点击应用后再修改，画布顶部的待应用标记随之出现', (tester) async {
+    tester.view.physicalSize = const Size(1440, 1024);
+    tester.view.devicePixelRatio = 1;
+    tester.platformDispatcher.accessibilityFeaturesTestValue =
+        const FakeAccessibilityFeatures(disableAnimations: true);
+    addTearDown(tester.platformDispatcher.clearAccessibilityFeaturesTestValue);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final engine = _Engine(), controller = MaintenanceController();
+    final session = PdfEditSession(engine: engine);
+    await session.load(
+      'NEW',
+      Uint8List.fromList([1]),
+      sourceNo: 'OLD',
+      sourceBytes: Uint8List.fromList([0]),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: PdfEditorScreen(controller: controller, session: session),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(session.needsSync, isFalse);
+    expect(find.textContaining('待应用'), findsNothing);
+    // 删除图片不切换 busy，也不重建画布，顶部标记仍需更新。
+    session.deleteTargetImage(0, _objects.first);
+    await tester.pump();
+    expect(find.textContaining('待应用'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    session.dispose();
+    controller.dispose();
+  });
   testWidgets('请求被跳过而组件仍在显示时只重试一次，不重复请求', (tester) async {
     var calls = 0;
     final first = Completer<String>();

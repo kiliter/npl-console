@@ -192,15 +192,39 @@ class _TableQuerySheetState extends State<TableQuerySheet> {
   }) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
-      const SizedBox(height: 8),
+      Text(
+        label,
+        style: const TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+          color: Color(0xff0f1e36),
+        ),
+      ),
+      const SizedBox(height: 6),
       TextField(
         controller: input,
         enabled: !running,
         keyboardType: number ? TextInputType.number : TextInputType.text,
         autocorrect: false,
         onSubmitted: (_) => submit(),
-        decoration: InputDecoration(hintText: hint),
+        style: const TextStyle(
+          fontFamily: 'Menlo',
+          fontSize: 13,
+          color: Color(0xff0f1e36),
+        ),
+        decoration: InputDecoration(
+          hintText: hint,
+          hintStyle: const TextStyle(
+            fontFamily: '.AppleSystemUIFont',
+            fontSize: 12,
+            color: Color(0xff94a3b8),
+          ),
+          isDense: true,
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 12,
+            vertical: 12,
+          ),
+        ),
       ),
     ],
   );
@@ -223,28 +247,73 @@ class _TableQuerySheetState extends State<TableQuerySheet> {
       },
       child: SafeArea(
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 16, 12, 8),
+            Container(
+              padding: const EdgeInsets.fromLTRB(20, 14, 12, 14),
+              decoration: const BoxDecoration(
+                color: Color(0xfff5f8fc),
+                border: Border(bottom: BorderSide(color: Color(0xffdde6f1))),
+              ),
               child: Row(
                 children: [
+                  Container(
+                    width: 34,
+                    height: 34,
+                    decoration: BoxDecoration(
+                      color: const Color(0xffeaf2ff),
+                      borderRadius: BorderRadius.circular(9),
+                      border: Border.all(color: const Color(0xffbfdbfe)),
+                    ),
+                    child: const Icon(
+                      Icons.table_view_rounded,
+                      size: 18,
+                      color: Color(0xff2563eb),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
-                          '数据查询',
-                          style: TextStyle(
-                            fontSize: 24,
-                            fontWeight: FontWeight.w700,
-                          ),
+                        Row(
+                          children: [
+                            const Text(
+                              '数据查询',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w800,
+                                color: Color(0xff0f1e36),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 7,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: const Color(0xffeaf2ff),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                table.tableName,
+                                style: const TextStyle(
+                                  fontFamily: 'Menlo',
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xff2563eb),
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
-                        const SizedBox(height: 6),
+                        const SizedBox(height: 2),
                         Text(
                           '按表直查 · 当前 ${table.label}（${table.tableName}）',
                           style: const TextStyle(
-                            color: Color(0xff8192a9),
-                            fontSize: 12,
+                            color: Color(0xff64748b),
+                            fontSize: 11,
                           ),
                         ),
                       ],
@@ -253,190 +322,418 @@ class _TableQuerySheetState extends State<TableQuerySheet> {
                   IconButton(
                     tooltip: '关闭数据查询',
                     onPressed: running ? null : () => Navigator.pop(context),
-                    icon: const Icon(Icons.close),
+                    icon: const Icon(
+                      Icons.close,
+                      size: 18,
+                      color: Color(0xff475569),
+                    ),
                   ),
                 ],
               ),
             ),
-            Expanded(
+            Flexible(
+              fit: FlexFit.loose,
               child: SingleChildScrollView(
                 key: const ValueKey('table-query-panel'),
-                padding: const EdgeInsets.all(24),
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    DropdownButtonFormField<TableKind>(
-                      initialValue: table,
-                      isExpanded: true,
-                      decoration: const InputDecoration(labelText: '查询表'),
-                      items: [
-                        for (final item in TableKind.values)
-                          DropdownMenuItem(
-                            value: item,
-                            child: Text(
-                              '${item.label}（${item.tableName}）',
-                              style: const TextStyle(fontSize: 12),
-                            ),
-                          ),
-                      ],
-                      onChanged: running
-                          ? null
-                          : (v) => setState(() {
-                              if (v == null) return;
-                              _queryGeneration++;
-                              invalidateDecryption();
-                              table = v;
-                              error = null;
-                              rows = null;
-                              originalRows = null;
-                              decryptKey.clear();
-                              decryptionStatus = null;
-                            }),
-                    ),
-                    const SizedBox(height: 24),
-                    conditionField('单据号', caseNo, hint: '输入完整单据号，可单独查询'),
-                    const SizedBox(height: 18),
-                    conditionField('受理流水', sysAccept, hint: '按受理流水查询需选择业务月份'),
-                    if (table == TableKind.interResult) ...[
-                      const SizedBox(height: 18),
-                      conditionField(
-                        '接口标识',
-                        interUrl,
-                        hint: '可选；签字识别填写 signcheck',
+                    Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: const Color(0xfff8fafd),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xffe4ecf6)),
                       ),
-                      const SizedBox(height: 18),
-                      conditionField('返回码', retCode, hint: '可选，按原始返回码精确查询'),
-                      const SizedBox(height: 18),
-                      TextField(
-                        controller: decryptKey,
-                        enabled: !running,
-                        obscureText: true,
-                        autocorrect: false,
-                        enableSuggestions: false,
-                        enableIMEPersonalizedLearning: false,
-                        decoration: const InputDecoration(
-                          labelText: 'SM4 解密密钥',
-                          hintText: '原始密钥，UTF-8 编码须为 16 字节',
-                        ),
-                        onChanged: (_) => setState(() {
-                          invalidateDecryption();
-                          rows = originalRows;
-                          decryptionStatus = '密钥已变更，请重新解密';
-                        }),
-                        onSubmitted: (_) => decryptResults(),
-                      ),
-                      const SizedBox(height: 8),
-                      const Text(
-                        '密钥仅保留在当前面板，不发送到服务器、不保存。仅解密返回信息、返回详情和请求参数。',
-                        style: TextStyle(fontSize: 12),
-                      ),
-                      Wrap(
-                        spacing: 12,
-                        children: [
-                          TextButton(
-                            onPressed:
-                                running || decrypting || originalRows == null
-                                ? null
-                                : decryptResults,
-                            child: const Text('本地解密'),
-                          ),
-                          TextButton(
-                            onPressed: running
-                                ? null
-                                : () {
-                                    invalidateDecryption();
-                                    decryptKey.clear();
-                                    setState(() {
-                                      rows = originalRows;
-                                      decryptionStatus = '已清除密钥并恢复原始结果';
-                                    });
-                                  },
-                            child: const Text('清除密钥及明文'),
-                          ),
-                        ],
-                      ),
-                      if (decrypting) const LinearProgressIndicator(),
-                      if (decryptionStatus != null) Text(decryptionStatus!),
-                    ],
-                    const SizedBox(height: 18),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                '业务月份',
-                                style: TextStyle(fontWeight: FontWeight.w600),
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          final wide = constraints.maxWidth >= 480;
+                          final tableSelect = DropdownButtonFormField<TableKind>(
+                            initialValue: table,
+                            isExpanded: true,
+                            decoration: const InputDecoration(
+                              labelText: '查询表',
+                              fillColor: Colors.white,
+                              isDense: true,
+                              contentPadding: EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 11,
                               ),
-                              const SizedBox(height: 8),
+                            ),
+                            items: [
+                              for (final item in TableKind.values)
+                                DropdownMenuItem(
+                                  value: item,
+                                  child: Text(
+                                    '${item.label}（${item.tableName}）',
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                            onChanged: running
+                                ? null
+                                : (v) => setState(() {
+                                    if (v == null) return;
+                                    _queryGeneration++;
+                                    invalidateDecryption();
+                                    table = v;
+                                    error = null;
+                                    rows = null;
+                                    originalRows = null;
+                                    decryptKey.clear();
+                                    decryptionStatus = null;
+                                  }),
+                          );
+                          final monthSelect = Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
                               OutlinedButton.icon(
                                 onPressed: running ? null : pickMonth,
                                 icon: const Icon(
                                   Icons.calendar_month_outlined,
-                                  size: 18,
+                                  size: 16,
+                                  color: Color(0xff2563eb),
                                 ),
                                 label: Text(
                                   month == null ? '不限制月份' : monthText,
+                                  style: TextStyle(
+                                    fontFamily:
+                                        month == null ? null : 'Menlo',
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                    color: const Color(0xff0f1e36),
+                                  ),
                                 ),
                                 style: OutlinedButton.styleFrom(
+                                  backgroundColor: Colors.white,
+                                  side: const BorderSide(
+                                    color: Color(0xffdde6f1),
+                                  ),
                                   padding: const EdgeInsets.symmetric(
-                                    vertical: 17,
+                                    vertical: 14,
                                     horizontal: 12,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10),
                                   ),
                                 ),
                               ),
+                              if (month != null) ...[
+                                const SizedBox(width: 4),
+                                IconButton(
+                                  tooltip: '清除月份条件',
+                                  onPressed: running
+                                      ? null
+                                      : () => setState(() => month = null),
+                                  icon: const Icon(Icons.close, size: 16),
+                                ),
+                              ],
                             ],
+                          );
+                          if (!wide) {
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                tableSelect,
+                                const SizedBox(height: 12),
+                                const Text(
+                                  '业务月份',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xff0f1e36),
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                monthSelect,
+                              ],
+                            );
+                          }
+                          return Row(
+                            children: [
+                              Expanded(child: tableSelect),
+                              const SizedBox(width: 12),
+                              monthSelect,
+                            ],
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        if (constraints.maxWidth < 480) {
+                          return Column(
+                            children: [
+                              conditionField(
+                                '单据号',
+                                caseNo,
+                                hint: '输入完整单据号，可单独查询',
+                              ),
+                              const SizedBox(height: 12),
+                              conditionField(
+                                '受理流水',
+                                sysAccept,
+                                hint: '按受理流水查询需选择业务月份',
+                              ),
+                            ],
+                          );
+                        }
+                        return Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: conditionField(
+                                '单据号',
+                                caseNo,
+                                hint: '输入完整单据号，可单独查询',
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: conditionField(
+                                '受理流水',
+                                sysAccept,
+                                hint: '按受理流水查询需选择业务月份',
+                              ),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                    if (table == TableKind.interResult) ...[
+                      const SizedBox(height: 12),
+                      LayoutBuilder(
+                        builder: (context, constraints) {
+                          if (constraints.maxWidth < 480) {
+                            return Column(
+                              children: [
+                                conditionField(
+                                  '接口标识',
+                                  interUrl,
+                                  hint: '可选；签字识别填写 signcheck',
+                                ),
+                                const SizedBox(height: 12),
+                                conditionField(
+                                  '返回码',
+                                  retCode,
+                                  hint: '可选，按原始返回码精确查询',
+                                ),
+                              ],
+                            );
+                          }
+                          return Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(
+                                child: conditionField(
+                                  '接口标识',
+                                  interUrl,
+                                  hint: '可选；签字识别填写 signcheck',
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: conditionField(
+                                  '返回码',
+                                  retCode,
+                                  hint: '可选，按原始返回码精确查询',
+                                ),
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: const Color(0xfff8fafd),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xffdde6f1)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            TextField(
+                              controller: decryptKey,
+                              enabled: !running,
+                              obscureText: true,
+                              autocorrect: false,
+                              enableSuggestions: false,
+                              enableIMEPersonalizedLearning: false,
+                              style: const TextStyle(
+                                fontFamily: 'Menlo',
+                                fontSize: 13,
+                              ),
+                              decoration: const InputDecoration(
+                                fillColor: Colors.white,
+                                labelText: 'SM4 解密密钥',
+                                hintText: '原始密钥，UTF-8 编码须为 16 字节',
+                                isDense: true,
+                                contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 11,
+                                ),
+                              ),
+                              onChanged: (_) => setState(() {
+                                invalidateDecryption();
+                                rows = originalRows;
+                                decryptionStatus = '密钥已变更，请重新解密';
+                              }),
+                              onSubmitted: (_) => decryptResults(),
+                            ),
+                            const SizedBox(height: 8),
+                            const Text(
+                              '密钥仅保留在当前面板，不发送到服务器、不保存。仅解密返回信息、返回详情和请求参数。',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Color(0xff64748b),
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Wrap(
+                              spacing: 8,
+                              children: [
+                                TextButton(
+                                  onPressed:
+                                      running ||
+                                          decrypting ||
+                                          originalRows == null
+                                      ? null
+                                      : decryptResults,
+                                  child: const Text('本地解密'),
+                                ),
+                                TextButton(
+                                  onPressed: running
+                                      ? null
+                                      : () {
+                                          invalidateDecryption();
+                                          decryptKey.clear();
+                                          setState(() {
+                                            rows = originalRows;
+                                            decryptionStatus =
+                                                '已清除密钥并恢复原始结果';
+                                          });
+                                        },
+                                  child: const Text('清除密钥及明文'),
+                                ),
+                              ],
+                            ),
+                            if (decrypting) const LinearProgressIndicator(),
+                            if (decryptionStatus != null)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: Text(
+                                  decryptionStatus!,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xff0d8a6a),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 10),
+                    const Row(
+                      children: [
+                        Icon(
+                          Icons.info_outline_rounded,
+                          size: 13,
+                          color: Color(0xff94a3b8),
+                        ),
+                        SizedBox(width: 5),
+                        Expanded(
+                          child: Text(
+                            '至少填写一个条件；单据号可单独查询，受理流水需搭配业务月份。',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Color(0xff64748b),
+                            ),
                           ),
                         ),
-                        if (month != null) ...[
-                          const SizedBox(width: 8),
-                          IconButton(
-                            tooltip: '清除月份条件',
-                            onPressed: running
-                                ? null
-                                : () => setState(() => month = null),
-                            icon: const Icon(Icons.close, size: 18),
-                          ),
-                        ],
                       ],
                     ),
-                    const SizedBox(height: 12),
-                    const Text(
-                      '至少填写一个条件；单据号可单独查询，受理流水需搭配业务月份。',
-                      style: TextStyle(fontSize: 12, color: Color(0xff8192a9)),
-                    ),
                     if (error != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 18),
-                        child: Text(
-                          error!,
-                          key: const ValueKey('table-query-error'),
-                          style: const TextStyle(
-                            color: Colors.red,
-                            height: 1.5,
-                          ),
+                      Container(
+                        margin: const EdgeInsets.only(top: 12),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 9,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xfffef2f2),
+                          borderRadius: BorderRadius.circular(9),
+                          border: Border.all(color: const Color(0xfffecaca)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.error_outline_rounded,
+                              size: 16,
+                              color: Color(0xffdc2626),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                error!,
+                                key: const ValueKey('table-query-error'),
+                                style: const TextStyle(
+                                  color: Color(0xffb91c1c),
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     if (running) ...[
-                      const SizedBox(height: 24),
+                      const SizedBox(height: 16),
                       const LinearProgressIndicator(),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 10),
                       Text(
                         widget.controller.message,
-                        style: const TextStyle(height: 1.7),
+                        style: const TextStyle(fontSize: 12, height: 1.6),
                       ),
                     ],
                     if (rows != null) ...[
-                      const SizedBox(height: 28),
-                      Text(
-                        rows!.isEmpty
-                            ? '未查询到记录'
-                            : '查询结果 · ${rows!.length} 条记录${rows!.first.keys.length > 8 ? ' · 表格仅展示前 8 列，点击行查看完整字段' : ''}',
-                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      const SizedBox(height: 18),
+                      Row(
+                        children: [
+                          Container(
+                            width: 6,
+                            height: 6,
+                            decoration: BoxDecoration(
+                              color: rows!.isEmpty
+                                  ? const Color(0xff94a3b8)
+                                  : const Color(0xff10b981),
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              rows!.isEmpty
+                                  ? '未查询到记录'
+                                  : '查询结果 · ${rows!.length} 条记录${rows!.first.keys.length > 8 ? ' · 表格仅展示前 8 列，点击行查看完整字段' : ''}',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xff0f1e36),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 10),
                       if (rows!.isNotEmpty) _resultTable(fields),
                     ],
                   ],
@@ -444,18 +741,30 @@ class _TableQuerySheetState extends State<TableQuerySheet> {
               ),
             ),
             Container(
-              padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 14),
               decoration: const BoxDecoration(
-                color: Colors.white,
-                border: Border(top: BorderSide(color: Color(0xffe4ebf4))),
+                color: Color(0xfff5f8fc),
+                border: Border(top: BorderSide(color: Color(0xffdde6f1))),
               ),
               child: SizedBox(
                 width: double.infinity,
-                height: 52,
+                height: 42,
                 child: FilledButton.icon(
                   onPressed: running ? cancel : submit,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xff2563eb),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    textStyle: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
                   icon: Icon(
                     running ? Icons.stop_circle_outlined : Icons.search,
+                    size: 16,
                   ),
                   label: Text(running ? '取消查询' : '查询${table.label}'),
                 ),
@@ -573,17 +882,57 @@ class RecordDetailsDialog extends StatelessWidget {
       color: Color(0xff1b2b42),
     );
     return AlertDialog(
-      title: Text('${table.label}记录详情 · ${entries.length} 项'),
+      backgroundColor: Colors.white,
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: const BorderSide(color: Color(0xffdde6f1)),
+      ),
+      title: Row(
+        children: [
+          Container(
+            width: 30,
+            height: 30,
+            decoration: BoxDecoration(
+              color: const Color(0xffeaf2ff),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xffbfdbfe)),
+            ),
+            child: const Icon(
+              Icons.article_outlined,
+              size: 16,
+              color: Color(0xff2563eb),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              '${table.label}记录详情 · ${entries.length} 项',
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w800,
+                color: Color(0xff0f1e36),
+              ),
+            ),
+          ),
+        ],
+      ),
       content: SizedBox(
-        width: 560,
+        width: 600,
         height: 480,
         child: ListView(
           children: [
             for (final e in entries)
               Container(
-                padding: const EdgeInsets.symmetric(vertical: 10),
-                decoration: const BoxDecoration(
-                  border: Border(bottom: BorderSide(color: Color(0xffedf1f6))),
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xfff8fafd),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xffe4ecf6)),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -594,8 +943,9 @@ class RecordDetailsDialog extends StatelessWidget {
                           child: Text(
                             '${fieldLabels[e.key] ?? e.key}${fieldLabels.containsKey(e.key) ? ' · ${e.key}' : ''}',
                             style: const TextStyle(
-                              color: Color(0xff8192a9),
+                              color: Color(0xff64748b),
                               fontSize: 11,
+                              fontWeight: FontWeight.w700,
                             ),
                           ),
                         ),
@@ -616,7 +966,11 @@ class RecordDetailsDialog extends StatelessWidget {
                                 ),
                               );
                             },
-                            icon: const Icon(Icons.copy_outlined, size: 14),
+                            icon: const Icon(
+                              Icons.copy_outlined,
+                              size: 14,
+                              color: Color(0xff475569),
+                            ),
                           ),
                         ),
                       ],
