@@ -6,6 +6,14 @@ import 'package:npl_maintenance/core/pdf_editor/edit_session.dart';
 import 'package:npl_maintenance/core/pdf_editor/pdf_engine.dart';
 
 class _DelayedEngine extends PdfEditEngine {
+  // 假引擎没有真实文字层，页面类型固定为地市协议页，避免调用原生识别。
+  @override
+  Future<PdfPageKind> pageKind(
+    Uint8List bytes,
+    int index, {
+    bool Function()? isNeeded,
+  }) async => PdfPageKind.cityAgreement;
+
   final first = Completer<PdfPageSnapshot>();
   int calls = 0;
   @override

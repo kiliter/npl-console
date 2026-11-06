@@ -47,45 +47,76 @@ class EditDocument {
   );
   final Set<int> mirrorPages = {};
   final Map<int, Uint8List> _thumbnails = {};
-  final Map<int, Future<Uint8List>> _pendingThumbnails = {};
-  Future<Uint8List> thumbnail(PdfEditEngine engine, int page) {
+  final Map<int, _Request<Uint8List>> _pendingThumbnails = {};
+
+  /// 缩略图低优先级渲染；[isNeeded] 与同页的其他请求合并，全部离开显示区域才跳过。
+  Future<Uint8List> thumbnail(
+    PdfEditEngine engine,
+    int page, {
+    bool Function()? isNeeded,
+  }) {
     final cached = _thumbnails[page];
     if (cached != null) return Future.value(cached);
-    return _pendingThumbnails.putIfAbsent(page, () {
-      final revision = bytes;
-      final future = PdfDiagnostics.trace(
+    final revision = bytes;
+    return _request(_pendingThumbnails, page, isNeeded, (needed) {
+      return PdfDiagnostics.trace(
         '缩略图排队及渲染',
-        () => engine.thumbnail(revision, page),
+        () => engine.thumbnail(revision, page, isNeeded: needed),
         data: {'页码': page + 1, '文档': identityHashCode(revision)},
-      );
-      future.then<void>(
-        (png) {
-          if (identical(bytes, revision)) {
-            _thumbnails[page] = png;
-            while (_thumbnails.length > 40) {
-              _thumbnails.remove(_thumbnails.keys.first);
-            }
+      ).then((png) {
+        if (identical(bytes, revision)) {
+          _thumbnails[page] = png;
+          while (_thumbnails.length > 40) {
+            _thumbnails.remove(_thumbnails.keys.first);
           }
-          if (identical(_pendingThumbnails[page], future)) {
-            _pendingThumbnails.remove(page);
-          }
-        },
-        onError: (Object _, StackTrace _) {
-          if (identical(_pendingThumbnails[page], future)) {
-            _pendingThumbnails.remove(page);
-          }
-        },
-      );
-      return future;
+        }
+        return png;
+      });
     });
   }
+
+  /// 同页请求去重：后来的请求共享进行中的任务，并把自己的 [isNeeded] 并入；
+  /// 只有全部请求方都不再需要时，引擎才在轮到时跳过。
+  Future<T> _request<T>(
+    Map<int, _Request<T>> pending,
+    int page,
+    bool Function()? isNeeded,
+    Future<T> Function(bool Function() needed) start,
+  ) {
+    final existing = pending[page];
+    if (existing != null) {
+      existing.needs.add(isNeeded ?? _always);
+      return existing.future;
+    }
+    final request = _Request<T>(isNeeded ?? _always);
+    pending[page] = request;
+    final Future<T> future;
+    try {
+      future = start(request.needed);
+    } catch (_) {
+      pending.remove(page);
+      rethrow;
+    }
+    request.future = future;
+    future.then<void>(
+      (_) {
+        if (identical(pending[page], request)) pending.remove(page);
+      },
+      onError: (Object _, StackTrace _) {
+        if (identical(pending[page], request)) pending.remove(page);
+      },
+    );
+    return future;
+  }
+
+  static bool _always() => true;
 
   int page = 0;
   PdfPageSnapshot snapshot;
   final List<Uint8List> undo = [], redo = [];
   Uint8List? saved;
   final _pages = <int, PdfPageSnapshot>{};
-  final _pendingPages = <int, Future<PdfPageSnapshot>>{};
+  final _pendingPages = <int, _Request<PdfPageSnapshot>>{};
   List<Size> get pageSizes =>
       snapshot.pageSizes ?? List.filled(snapshot.pageCount, snapshot.size);
 
@@ -107,59 +138,108 @@ class EditDocument {
       _pages[index] = cached;
       return Future.value(cached);
     }
-    return _pendingPages.putIfAbsent(index, () {
-      final revision = bytes;
+    final revision = bytes;
+    return _request(_pendingPages, index, isNeeded, (needed) {
       PdfDiagnostics.record(
         '页面预览排队',
         data: {'页码': index + 1, '文档': identityHashCode(revision)},
       );
-      final task =
-          PdfDiagnostics.trace(
-            '页面预览',
-            () => engine.inspect(revision, index, isNeeded: isNeeded),
-            data: {'页码': index + 1, '文档': identityHashCode(revision)},
-          ).then((result) {
-            if (identical(bytes, revision)) {
-              _pages[index] = result;
-              while (_pages.length > maxCachedPages ||
-                  (_pages.length > 1 &&
-                      _pages.values.fold<int>(0, (n, p) => n + p.png.length) >
-                          24 * 1024 * 1024)) {
-                _pages.remove(_pages.keys.first);
-              }
-            }
-            return result;
-          });
-      task.then<void>(
-        (_) {
-          if (identical(_pendingPages[index], task)) {
-            _pendingPages.remove(index);
+      return PdfDiagnostics.trace(
+        '页面预览',
+        () => engine.inspect(revision, index, isNeeded: needed),
+        data: {'页码': index + 1, '文档': identityHashCode(revision)},
+      ).then((result) {
+        if (identical(bytes, revision)) {
+          _pages[index] = result;
+          // 预览随附的类型单独保留，预览页缓存淘汰后徽标仍能直接读取。
+          if (result.kind != null) _kinds[index] = result.kind!;
+          while (_pages.length > maxCachedPages ||
+              (_pages.length > 1 &&
+                  _pages.values.fold<int>(0, (n, p) => n + p.png.length) >
+                      24 * 1024 * 1024)) {
+            _pages.remove(_pages.keys.first);
           }
-        },
-        onError: (Object _, StackTrace _) {
-          if (identical(_pendingPages[index], task)) {
-            _pendingPages.remove(index);
-          }
-        },
-      );
-      return task;
+        }
+        return result;
+      });
     });
   }
 
-  void releasePreview(int index, Future<PdfPageSnapshot> request) {
-    if (identical(_pendingPages[index], request)) _pendingPages.remove(index);
+  /// 页面组件销毁时调用。请求方的 isNeeded 已随销毁返回 false，进行中的任务保留，
+  /// 重新滚回的页面可以直接接上，不重复排队。
+  void releasePreview(int index, Future<PdfPageSnapshot> request) {}
+
+  /// 页面类型识别结果，按当前字节版本缓存；修改单据后随预览一起清空。
+  final Map<int, PdfPageKind> _kinds = {};
+  final Map<int, _Request<PdfPageKind>> _pendingKinds = {};
+
+  /// 已识别过的页面类型，未识别时为 null（同步读取，界面不必等一帧）。
+  /// 预览过的页面直接取快照里随渲染一起识别的类型。
+  PdfPageKind? pageKindNow(int page) =>
+      _kinds[page] ??
+      (page == this.page ? snapshot.kind : null) ??
+      _pages[page]?.kind;
+
+  Future<PdfPageKind> pageKind(
+    PdfEditEngine engine,
+    int page, {
+    bool Function()? isNeeded,
+  }) {
+    final cached = pageKindNow(page);
+    if (cached != null) return Future.value(cached);
+    // 页面预览正在进行时等它带回类型。只等待、不并入它的需要判断：
+    // 预览是否跳过仍只由页面组件决定，缩略图上的标签不会让滚走的页面照常渲染。
+    final previewing = _pendingPages[page];
+    if (previewing != null) {
+      return previewing.future.then(
+        (snapshot) =>
+            snapshot.kind ?? pageKind(engine, page, isNeeded: isNeeded),
+        // 预览因页面离开显示区域被跳过时改为自己识别；因文档释放作废时不回退，
+        // 交给组件在下一帧确认仍显示后再请求，避免释放后重新加载旧文档。
+        onError: (Object error) => error is PdfRenderSkipped && !error.released
+            ? pageKind(engine, page, isNeeded: isNeeded)
+            : Future<PdfPageKind>.error(error),
+      );
+    }
+    final revision = bytes;
+    return _request(_pendingKinds, page, isNeeded, (needed) {
+      // 轮到识别时，若同页预览已经带回类型，直接跳过这次原生调用。
+      bool stillUnknown() => pageKindNow(page) == null && needed();
+      return engine
+          .pageKind(revision, page, isNeeded: stillUnknown)
+          .then(
+            (kind) {
+              if (identical(bytes, revision)) _kinds[page] = kind;
+              return kind;
+            },
+            onError: (Object error) {
+              final known = pageKindNow(page);
+              if (error is PdfRenderSkipped && known != null) return known;
+              throw error;
+            },
+          );
+    });
   }
 
   void clearPreviews() {
+    _kinds.clear();
+    _pendingKinds.clear();
     _thumbnails.clear();
     _pendingThumbnails.clear();
     _pages.clear();
     _pendingPages.clear();
   }
 
-  EditDocument(this.caseNo, Uint8List initial, this.snapshot)
-    : original = Uint8List.fromList(initial),
-      bytes = Uint8List.fromList(initial);
+  /// 字节数组从不原地修改（各操作都生成新数组），原始版本与当前版本可以共用同一份；
+  /// [copy] 为 false 时直接沿用调用方已独占的数组，便于与首屏渲染、预览文档共享，
+  /// 引擎的已打开文档缓存按字节身份命中。
+  EditDocument(
+    this.caseNo,
+    Uint8List initial,
+    this.snapshot, {
+    bool copy = true,
+  }) : original = copy ? Uint8List.fromList(initial) : initial,
+       bytes = copy ? Uint8List.fromList(initial) : initial;
 
   /// 与已保存版本不同。逐字节比较数 MB 的 PDF 代价不低，而工具栏每次刷新都要读取，
   /// 结果按 (bytes, saved) 的对象身份缓存；各操作总是替换字节数组而非原地修改。
@@ -227,17 +307,22 @@ class PdfEditSession extends ChangeNotifier {
     busy = true;
     error = null;
     notifyListeners();
+    // 独占一份副本，首屏渲染、目标与预览文档共用，引擎只需打开一次。
+    final targetData = Uint8List.fromList(targetBytes);
+    final sourceData = sourceBytes == null
+        ? null
+        : Uint8List.fromList(sourceBytes);
     try {
       // 新老单据同时发出：PDFium 渲染一份时，另一份的 PNG 编码并行进行。
       final targetTask = PdfDiagnostics.trace(
         '目标单据解析及渲染',
-        () => engine.inspect(targetBytes, 0),
+        () => engine.inspect(targetData, 0),
       );
-      final sourceTask = sourceBytes == null
+      final sourceTask = sourceData == null
           ? null
           : PdfDiagnostics.trace(
               '来源单据解析及渲染',
-              () => engine.inspect(sourceBytes, 0),
+              () => engine.inspect(sourceData, 0),
             );
       // 先挂上空监听，任一份先失败都不会变成未捕获异常；await 仍会收到错误。
       targetTask.ignore();
@@ -249,11 +334,16 @@ class PdfEditSession extends ChangeNotifier {
       materialsRevision++;
       syncStatus = null;
       needsSync = false;
-      target = EditDocument(targetNo, targetBytes, nextTarget);
+      target = EditDocument(targetNo, targetData, nextTarget, copy: false);
       source = nextSource == null
           ? null
-          : EditDocument(sourceNo!, sourceBytes!, nextSource);
-      previewTarget = EditDocument(targetNo, targetBytes, nextTarget);
+          : EditDocument(sourceNo!, sourceData!, nextSource, copy: false);
+      previewTarget = EditDocument(
+        targetNo,
+        targetData,
+        nextTarget,
+        copy: false,
+      );
       deletedImages.clear();
     } catch (e) {
       if (!_disposed && revision == _revision) error = _message(e);
@@ -605,7 +695,7 @@ class PdfEditSession extends ChangeNotifier {
       doc.commit(next);
       doc.page = 0;
       doc.snapshot = snapshot;
-      previewTarget = EditDocument(doc.caseNo, next, snapshot);
+      previewTarget = EditDocument(doc.caseNo, next, snapshot, copy: false);
       previewChanged();
     });
   }
@@ -833,4 +923,12 @@ class PdfEditSession extends ChangeNotifier {
     png: Uint8List.fromList(img.encodePng(image)),
     ratio: image.width / image.height,
   );
+}
+
+/// 一次进行中的请求及其全部请求方的需要判断。
+class _Request<T> {
+  _Request(bool Function() first) : needs = [first];
+  final List<bool Function()> needs;
+  late Future<T> future;
+  bool needed() => needs.any((need) => need());
 }

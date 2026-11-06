@@ -39,7 +39,7 @@ class RepairPreviewCache {
   }
 
   Future<ui.Image> image(SharedPdfImage m, int width) async {
-    _prune();
+    prune();
     final key = (m, width);
     var entry = _touch(_images, key);
     if (entry == null) {
@@ -99,13 +99,18 @@ class RepairPreviewCache {
   }
 
   /// 移出共享区的图片不再出现在任何页面，释放其位图。
-  void _prune() {
+  /// 释放已移出共享区的图片位图，以及不属于当前单据版本的背景图。
+  void prune() {
     final alive = session.materials.toSet();
     _images.removeWhere((key, entry) {
       if (alive.contains(key.$1)) return false;
       entry.dispose();
       return true;
     });
+    final current = [session.previewTarget?.bytes, session.target?.bytes];
+    _backgrounds.removeWhere(
+      (key, _) => !current.any((bytes) => identical(bytes, key.$1)),
+    );
   }
 
   void _clear() {
@@ -311,6 +316,8 @@ class _RepairPreviewState extends State<RepairPreview> {
       if (ready != null) {
         have?.image.dispose();
         decoded[m] = (width: width, image: ready);
+        // 之前较低宽度的请求返回时不能再覆盖这张高分辨率位图。
+        requested.remove(m);
         continue;
       }
       requested[m] = width;

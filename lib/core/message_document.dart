@@ -311,6 +311,7 @@ MessageDocument parseMessage(Object? input, {String mode = 'auto'}) {
 }
 
 /// 字段名和内容关键字同时过滤；返回匹配节点及路径，不改动原报文结构。
+/// 遍历时临时生成子节点、不写入节点缓存，搜索一次不会让整棵字段树常驻内存。
 List<MessageNode> searchMessage(
   MessageNode root, {
   String key = '',
@@ -319,7 +320,7 @@ List<MessageNode> searchMessage(
   final result = <MessageNode>[], pending = <MessageNode>[root];
   final keyQuery = key.toLowerCase(), valueQuery = keyword.toLowerCase();
   while (pending.isNotEmpty) {
-    final node = pending.removeLast(), children = node.children;
+    final node = pending.removeLast(), children = node._children();
     final value = children.isEmpty
         ? node.source
         : node.value is XmlElement

@@ -3,6 +3,9 @@ import 'dart:io';
 import 'request_log_store.dart';
 import 'runtime_log.dart';
 
+/// 主动跳过（非失败）的任务抛出的异常，诊断日志记为“跳过”，不记调用栈。
+abstract interface class PdfDiagnosticsSkip implements Exception {}
+
 /// 与接口记录共用文件；不接收单据号、正文、地址或认证参数。
 class PdfDiagnostics {
   static RequestLogStore store = RequestLogStore();
@@ -63,6 +66,9 @@ class PdfDiagnostics {
       final result = await action();
       record('$stage：完成', id: id, data: {'耗时毫秒': watch.elapsedMilliseconds});
       return result;
+    } on PdfDiagnosticsSkip {
+      record('$stage：跳过', id: id, data: {'耗时毫秒': watch.elapsedMilliseconds});
+      rethrow;
     } catch (error, stack) {
       record(
         '$stage：失败',

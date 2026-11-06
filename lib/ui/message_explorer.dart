@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:xml/xml.dart';
 import 'package:flutter/material.dart';
@@ -91,8 +92,25 @@ class _MessageExplorerState extends State<MessageExplorer> {
     if (scroll.hasClients) scroll.jumpTo(0);
   }
 
+  /// 大报文搜索要遍历整棵字段树或全文，逐字输入时合并为停顿后一次刷新；
+  /// 小报文立即刷新，保持输入即见结果。
+  Timer? _searchTimer;
+  static const searchDebounceLength = 256 * 1024;
+  void _search(VoidCallback update) {
+    update();
+    _searchTimer?.cancel();
+    if (document.source.length < searchDebounceLength) {
+      setState(() {});
+      return;
+    }
+    _searchTimer = Timer(const Duration(milliseconds: 220), () {
+      if (mounted) setState(() {});
+    });
+  }
+
   @override
   void dispose() {
+    _searchTimer?.cancel();
     _parseGeneration++;
     keySearch.dispose();
     keyword.dispose();
@@ -141,10 +159,12 @@ class _MessageExplorerState extends State<MessageExplorer> {
         .backgroundParser(raw, mode: parseMode)
         .then(
           (result) {
+            // 即使用户已切走也写入缓存，回到这一层无需重新解析。
+            cache[parseMode] = result;
             if (!mounted || generation != _parseGeneration) return;
             setState(() {
               parsing = false;
-              document = cache[parseMode] = result;
+              document = result;
               _treeRevision++;
             });
           },
@@ -406,7 +426,7 @@ class _MessageExplorerState extends State<MessageExplorer> {
                 labelText: '字段名 / key 搜索',
                 prefixIcon: Icon(Icons.key_outlined, size: 16),
               ),
-              onChanged: (value) => setState(() => session.keyText = value),
+              onChanged: (value) => _search(() => session.keyText = value),
             ),
           ),
           SizedBox(
@@ -418,7 +438,7 @@ class _MessageExplorerState extends State<MessageExplorer> {
                 labelText: '内容关键字搜索',
                 prefixIcon: Icon(Icons.search, size: 17),
               ),
-              onChanged: (value) => setState(() => session.keywordText = value),
+              onChanged: (value) => _search(() => session.keywordText = value),
             ),
           ),
           if (document.structured)

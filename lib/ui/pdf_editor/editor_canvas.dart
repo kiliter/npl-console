@@ -475,12 +475,32 @@ class _EditorCanvasState extends State<EditorCanvas> {
                                   SizedBox(
                                     height: 28,
                                     child: Center(
-                                      child: Text(
-                                        '第 ${index + 1} / ${sizes.length} 页 · ${pageLabel(index)}',
-                                        style: const TextStyle(
-                                          fontSize: 12,
-                                          color: Color(0xff52647c),
-                                        ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Flexible(
+                                            child: Text(
+                                              '第 ${index + 1} / ${sizes.length} 页 · ${pageLabel(index)}',
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                fontSize: 12,
+                                                color: Color(0xff52647c),
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 6),
+                                          PageKindBadge(
+                                            key: ValueKey((
+                                              'kind',
+                                              widget.document.bytes,
+                                              index,
+                                            )),
+                                            document: widget.document,
+                                            engine: widget.engine,
+                                            page: index,
+                                          ),
+                                        ],
                                       ),
                                     ),
                                   ),
@@ -550,9 +570,16 @@ class _EditorCanvasState extends State<EditorCanvas> {
                               index: index,
                             ),
                           ),
-                          Text(
-                            '${index + 1}',
-                            style: const TextStyle(fontSize: 10),
+                          PageKindBadge(
+                            key: ValueKey((
+                              'thumb-kind',
+                              widget.document.bytes,
+                              index,
+                            )),
+                            document: widget.document,
+                            engine: widget.engine,
+                            page: index,
+                            compact: true,
                           ),
                         ],
                       ),
@@ -628,6 +655,114 @@ class _EditorCanvasState extends State<EditorCanvas> {
   );
 }
 
+/// 共享请求在轮到时已无人需要而被跳过，但当前组件仍在显示（如释放文档后
+/// 仍短暂挂载）：请求结束后下一帧重新请求一次。返回 true 表示正在等待重试。
+///
+/// 每个请求最多重试一次，FutureBuilder 换 future 后保留的旧错误不会触发重复重试。
+bool retryIfSkipped(
+  State state,
+  AsyncSnapshot<Object?> snapshot,
+  Future<Object?> current,
+  VoidCallback again,
+) {
+  if (snapshot.error is! PdfRenderSkipped) return false;
+  if (snapshot.connectionState != ConnectionState.done) return true;
+  final retried = _retried[current] ??= <State>{};
+  if (!retried.add(state)) return true;
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    // ignore: invalid_use_of_protected_member
+    if (state.mounted) state.setState(again);
+  });
+  return true;
+}
+
+/// 每个请求已重试过的组件；同一请求被页眉和缩略图共享时各自重试一次。
+final _retried = Expando<Set<State>>('retriedRequest');
+
+/// 页面类型标签：页眉显示完整名称，缩略图下方显示“页码 + 简称”。
+/// 识别在引擎中低优先级排队，结果按单据版本缓存；识别失败时不显示类型。
+class PageKindBadge extends StatefulWidget {
+  final EditDocument document;
+  final PdfEditEngine engine;
+  final int page;
+  final bool compact;
+  const PageKindBadge({
+    super.key,
+    required this.document,
+    required this.engine,
+    required this.page,
+    this.compact = false,
+  });
+
+  static Color color(PdfPageKind kind) => switch (kind) {
+    PdfPageKind.acceptance => const Color(0xff2869e8),
+    PdfPageKind.signature => const Color(0xff7854aa),
+    PdfPageKind.riskTranscript => const Color(0xffc0671a),
+    PdfPageKind.cityAgreement => const Color(0xff52647c),
+  };
+
+  @override
+  State<PageKindBadge> createState() => _PageKindBadgeState();
+}
+
+class _PageKindBadgeState extends State<PageKindBadge> {
+  late Future<PdfPageKind> kind = request();
+  Future<PdfPageKind> request() => widget.document.pageKind(
+    widget.engine,
+    widget.page,
+    isNeeded: () => mounted,
+  );
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<PdfPageKind>(
+    future: kind,
+    // 已识别过的页面直接显示，来回滚动时标签不闪烁。
+    initialData: widget.document.pageKindNow(widget.page),
+    builder: (context, snapshot) {
+      retryIfSkipped(this, snapshot, kind, () {
+        kind = request();
+      });
+      final value = snapshot.data;
+      if (widget.compact) {
+        return Text.rich(
+          TextSpan(
+            text: '${widget.page + 1}',
+            children: [
+              if (value != null)
+                TextSpan(
+                  text: ' ${value.short}',
+                  style: TextStyle(color: PageKindBadge.color(value)),
+                ),
+            ],
+          ),
+          key: const ValueKey('page-kind-short'),
+          maxLines: 1,
+          overflow: TextOverflow.clip,
+          style: const TextStyle(fontSize: 10),
+        );
+      }
+      if (value == null) return const SizedBox.shrink();
+      final color = PageKindBadge.color(value);
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: .1),
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: color.withValues(alpha: .35)),
+        ),
+        child: Text(
+          value.label,
+          style: TextStyle(
+            fontSize: 11,
+            color: color,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      );
+    },
+  );
+}
+
 class _PageThumbnail extends StatefulWidget {
   final EditDocument document;
   final PdfEditEngine engine;
@@ -643,20 +778,28 @@ class _PageThumbnail extends StatefulWidget {
 }
 
 class _PageThumbnailState extends State<_PageThumbnail> {
-  late Future<Uint8List> image = widget.document.thumbnail(
+  late Future<Uint8List> image = request();
+  Future<Uint8List> request() => widget.document.thumbnail(
     widget.engine,
     widget.index,
+    isNeeded: () => mounted,
   );
+
   @override
   Widget build(BuildContext context) => FutureBuilder<Uint8List>(
     future: image,
     builder: (context, snapshot) {
+      if (retryIfSkipped(this, snapshot, image, () {
+        image = request();
+      })) {
+        return const SizedBox.shrink();
+      }
       if (snapshot.hasError) {
         return IconButton(
           icon: const Icon(Icons.refresh, size: 16),
           tooltip: '重试缩略图',
           onPressed: () => setState(() {
-            image = widget.document.thumbnail(widget.engine, widget.index);
+            image = request();
           }),
         );
       }
@@ -712,7 +855,8 @@ class _RepairPageState extends State<_RepairPage> {
     });
   }
 
-  late Future<PdfPageSnapshot> preview = widget.document.preview(
+  late Future<PdfPageSnapshot> preview = request();
+  Future<PdfPageSnapshot> request() => widget.document.preview(
     widget.engine,
     widget.page,
     isNeeded: () => mounted,
@@ -774,6 +918,12 @@ class _RepairPageState extends State<_RepairPage> {
     future: preview,
     builder: (context, state) {
       if (state.connectionState == ConnectionState.done) slowTimer?.cancel();
+      if (retryIfSkipped(this, state, preview, () {
+        watchLoading();
+        preview = request();
+      })) {
+        return const ColoredBox(color: Colors.white);
+      }
       if (state.hasError) {
         return ColoredBox(
           color: Colors.white,
@@ -785,10 +935,7 @@ class _RepairPageState extends State<_RepairPage> {
                 TextButton(
                   onPressed: () => setState(() {
                     watchLoading();
-                    preview = widget.document.preview(
-                      widget.engine,
-                      widget.page,
-                    );
+                    preview = request();
                   }),
                   child: const Text('重试'),
                 ),

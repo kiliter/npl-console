@@ -53,6 +53,7 @@ void main() {
         for (final doc in [session.source!, session.previewTarget!]) {
           for (var thumb = 0; thumb < doc.snapshot.pageCount; thumb++) {
             await doc.thumbnail(session.engine, thumb);
+            await doc.pageKind(session.engine, thumb);
           }
           for (var page = 1; page < doc.snapshot.pageCount; page++) {
             await doc.preview(session.engine, page);
@@ -109,6 +110,7 @@ void main() {
         for (final doc in [session.source!, session.previewTarget!]) {
           for (var thumb = 0; thumb < doc.snapshot.pageCount; thumb++) {
             await doc.thumbnail(session.engine, thumb);
+            await doc.pageKind(session.engine, thumb);
           }
           for (var page = 1; page < doc.snapshot.pageCount; page++) {
             await doc.preview(session.engine, page);

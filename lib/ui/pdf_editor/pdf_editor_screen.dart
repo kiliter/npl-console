@@ -65,6 +65,8 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
     if (session.materialsRevision == _materialsRevision) return;
     _materialsRevision = session.materialsRevision;
     connections.setImages(session.materials);
+    // 移出共享区、重置或重新加载后，及时释放不再使用的解码位图。
+    RepairPreviewCache.of(session).prune();
   }
 
   /// 局部监听会话：仅 [select] 结果变化时重建 [build]。

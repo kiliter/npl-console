@@ -1,17 +1,21 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:isolate' show TransferableTypedData;
 import 'dart:ffi' as ffi;
 import 'dart:io' show Platform;
 import '../pdf_diagnostics.dart';
-import '../pdf_memory_document.dart';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui';
 import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart' show compute, visibleForTesting;
 import 'package:image/image.dart' as img;
-import 'package:pdfrx/pdfrx.dart';
+import 'package:pdfrx/pdfrx.dart'
+    show Pdfrx, PdfrxEntryFunctions, pdfrxFlutterInitialize;
 import 'package:pdfium_dart/pdfium_dart.dart' as native;
+import 'page_kind.dart';
+
+export 'page_kind.dart' show PdfPageKind;
 
 enum PdfObjectKind { text, image }
 
@@ -49,12 +53,16 @@ class PdfPageSnapshot {
   final List<PdfEditObject> objects;
   final int pageCount;
   final List<Size>? pageSizes;
+
+  /// 页面类型，预览渲染时顺带识别；旧接口构造的快照为空。
+  final PdfPageKind? kind;
   const PdfPageSnapshot(
     this.png,
     this.size,
     this.objects,
     this.pageCount, {
     this.pageSizes,
+    this.kind,
   });
 }
 
@@ -75,8 +83,10 @@ class PdfImagePlacement {
 }
 
 /// 页面渲染被调度到执行前已不再需要（如快速滚动时页面离开显示区域）。
-class PdfRenderSkipped implements Exception {
-  const PdfRenderSkipped();
+class PdfRenderSkipped implements PdfDiagnosticsSkip {
+  /// 为 true 表示因文档已释放（切换环境、关闭编辑页）作废，而不是页面离开显示区域。
+  final bool released;
+  const PdfRenderSkipped({this.released = false});
   @override
   String toString() => '页面已离开显示区域';
 }
@@ -90,7 +100,8 @@ class PdfRenderSkipped implements Exception {
 class _PdfiumScheduler {
   final _high = Queue<Future<void> Function()>(),
       _low = Queue<Future<void> Function()>();
-  bool _running = false;
+  bool _running = false, _pending = false;
+  bool get running => _running;
 
   Future<T> run<T>(Future<T> Function() task, {bool low = false}) {
     final completer = Completer<T>();
@@ -101,7 +112,15 @@ class _PdfiumScheduler {
         completer.completeError(error, stack);
       }
     });
-    _drain();
+    // 推迟到微任务再开始：同一帧里先后发出的请求（如页眉标签先于页面预览构建）
+    // 都入队后再按优先级取，不会因调度器恰好空闲让低优先级任务抢先执行。
+    if (!_running && !_pending) {
+      _pending = true;
+      scheduleMicrotask(() {
+        _pending = false;
+        _drain();
+      });
+    }
     return completer.future;
   }
 
@@ -156,20 +175,34 @@ class PdfEditEngine {
     (Platform.numberOfProcessors - 1).clamp(1, 4),
   );
 
-  /// 只读渲染复用已打开的文档。pdfrx 打开一份 5 MB 单据约 50～100 ms，
-  /// 原先每渲染一页、每张缩略图都重新打开一次。按字节对象身份缓存最近的版本
-  /// （修改总是生成新的字节数组），淘汰与释放都在调度器任务内进行，不会与渲染并发。
-  final _documents = LinkedHashMap<Uint8List, Future<PdfDocument>>.identity();
-  static const maxOpenDocuments = 4;
+  /// 只读操作（页面预览、缩略图、页面类型）共用 PDFium 后台 isolate 里已加载的文档：
+  /// 每个字节版本只在第一次发送字节并解析一次，之后只发编号。按字节对象身份缓存
+  /// （修改总是生成新的字节数组），最近使用的版本保留 [maxOpenDocuments] 个，
+  /// 且原始字节合计不超过 [maxOpenBytes]。写入类操作会改动文档对象，仍各自在
+  /// 全新副本上执行（[_native]）。
+  final _readKeys = LinkedHashMap<Uint8List, int>.identity();
+  static int _nextReadKey = 0;
+  static const maxOpenDocuments = 4, maxOpenBytes = 96 * 1024 * 1024;
 
-  /// 实际打开文档的次数，仅供测试验证缓存命中。
+  /// 实际在后台加载文档的次数，仅供测试验证缓存命中。
   @visibleForTesting
   int debugOpenCount = 0;
+
+  /// 发往 PDFium 后台的原生调用次数、当前缓存的已打开文档数，仅供测试。
+  @visibleForTesting
+  int debugNativeCount = 0;
+  @visibleForTesting
+  int get debugCachedDocuments => _readKeys.length;
+
+  /// 释放代次：[releaseDocuments] 后递增，此前排队的只读任务轮到时直接跳过，
+  /// 不会在释放之后把旧文档重新加载并留在缓存里。
+  int _generation = 0;
 
   Future<T> _native<T>(
     Uint8List bytes,
     T Function(native.PDFium, native.FPDF_DOCUMENT) task,
   ) async {
+    debugNativeCount++;
     await PdfDiagnostics.trace('修复引擎初始化', () => pdfrxFlutterInitialize());
     final result = await PdfDiagnostics.trace(
       'PDF原生处理',
@@ -182,107 +215,381 @@ class PdfEditEngine {
     return result.value as T;
   }
 
-  Future<PdfDocument> _document(Uint8List bytes) {
-    final cached = _documents.remove(bytes);
-    if (cached != null) return _documents[bytes] = cached;
-    debugOpenCount++;
-    final opening = openMemoryPdf(bytes, 'edit-${identityHashCode(bytes)}');
-    _documents[bytes] = opening;
-    opening.then<void>(
-      (_) {},
-      onError: (Object _, StackTrace _) {
-        if (identical(_documents[bytes], opening)) _documents.remove(bytes);
-      },
-    );
-    while (_documents.length > maxOpenDocuments) {
-      _close(_documents.remove(_documents.keys.first)!);
+  /// 在后台已加载的只读文档上执行 [task]。
+  ///
+  /// 只能在调度任务内调用：调度器串行保证淘汰、释放与读取不会交错，
+  /// 已关闭的编号不会还有读请求在路上。[task] 须由静态方法创建，避免捕获 this。
+  Future<T> _read<T>(
+    Uint8List bytes,
+    T Function(native.PDFium, native.FPDF_DOCUMENT) task,
+  ) async {
+    assert(_scheduler.running, '只读文档只能在调度任务内访问');
+    debugNativeCount++;
+    await pdfrxFlutterInitialize();
+    var key = _readKeys.remove(bytes);
+    final known = key != null;
+    key ??= ++_nextReadKey;
+    _readKeys[bytes] = key;
+    _evict(keep: bytes);
+    if (!known) debugOpenCount++;
+    var result = await PdfrxEntryFunctions.instance.compute(_readWorker<T>, (
+      key: key,
+      bytes: known ? null : bytes,
+      task: task,
+    ));
+    // 后台 isolate 被 pdfrx 重建过，缓存已不存在：带上字节重发一次。
+    if (result.missing) {
+      debugOpenCount++;
+      result = await PdfrxEntryFunctions.instance.compute(_readWorker<T>, (
+        key: key,
+        bytes: bytes,
+        task: task,
+      ));
     }
-    return opening;
+    // 加载失败的版本不留编号，下次重新尝试而不是先空跑一次。
+    if (result.loadFailed && identical(_readKeys[bytes], key)) {
+      _readKeys.remove(bytes);
+    }
+    if (result.error != null) throw FormatException(result.error!);
+    return result.value as T;
   }
 
-  static void _close(Future<PdfDocument> document) => document.then(
-    (doc) => PdfDiagnostics.trace('PDF文档释放', () => doc.dispose()),
-    onError: (Object _, StackTrace _) {},
-  );
+  /// 按数量与总字节淘汰最久未用的版本（至少保留当前版本）。
+  void _evict({required Uint8List keep}) {
+    int total() => _readKeys.keys.fold(0, (n, b) => n + b.length);
+    while (_readKeys.length > 1 &&
+        (_readKeys.length > maxOpenDocuments || total() > maxOpenBytes)) {
+      final oldest = _readKeys.keys.first;
+      if (identical(oldest, keep)) break;
+      _closeRead(_readKeys.remove(oldest)!);
+    }
+  }
 
-  /// 释放缓存的已打开文档（关闭编辑页、切换环境时调用）。
-  Future<void> releaseDocuments() => _scheduler.run(() async {
-    final all = _documents.values.toList();
-    _documents.clear();
-    all.forEach(_close);
-  });
+  static void _closeRead(int key) {
+    PdfrxEntryFunctions.instance.compute(_closeReadWorker, key).ignore();
+  }
 
-  Future<T> _open<T>(
-    Uint8List bytes,
-    Future<T> Function(PdfDocument) task, {
+  /// 释放后台缓存的只读文档（关闭编辑页、切换环境时调用）。
+  /// 已排队、尚未执行的只读任务随之作废。
+  Future<void> releaseDocuments() {
+    _generation++;
+    return _scheduler.run(() async {
+      _readKeys.values.forEach(_closeRead);
+      _readKeys.clear();
+    });
+  }
+
+  /// 经调度器执行的只读任务。排队期间页面可能已滚出显示区域、或文档已释放，
+  /// 轮到时再判断，避免处理无人查看的页面。
+  Future<T> _scheduled<T>(
+    Future<T> Function() task, {
     bool low = false,
     bool Function()? isNeeded,
-  }) => _scheduler.run(() async {
-    // 排队期间页面可能已滚出显示区域，轮到时再判断，避免渲染无人查看的页面。
-    if (isNeeded != null && !isNeeded()) throw const PdfRenderSkipped();
-    return task(await _document(bytes));
-  }, low: low);
+  }) {
+    final generation = _generation;
+    return _scheduler.run(() async {
+      if (generation != _generation) {
+        throw const PdfRenderSkipped(released: true);
+      }
+      if (isNeeded != null && !isNeeded()) throw const PdfRenderSkipped();
+      return task();
+    }, low: low);
+  }
 
-  /// 渲染一页预览。PDFium 只做对象解析与位图渲染；PNG 编码在释放调度器后
-  /// 进入并行池，PDFium 可以立即开始渲染下一页。
+  /// 渲染一页预览。对象解析、页面类型识别与位图渲染在一次原生调用里完成，
+  /// 页面只加载一次；PNG 编码在释放调度器后进入并行池，PDFium 可以立即处理下一页。
   Future<PdfPageSnapshot> inspect(
     Uint8List bytes,
     int pageIndex, {
     bool Function()? isNeeded,
   }) async {
-    final objectsTask = PdfDiagnostics.trace(
-      '页面对象解析',
-      () => _inspectObjects(bytes, pageIndex),
-      data: {'页码': pageIndex + 1, '文档': identityHashCode(bytes)},
-    );
-    final renderTask = _open(bytes, isNeeded: isNeeded, (doc) async {
-      if (pageIndex < 0 || pageIndex >= doc.pages.length) {
-        throw const FormatException('页码超出范围');
-      }
-      final p = doc.pages[pageIndex];
-      final image = await PdfDiagnostics.trace(
-        '页面位图渲染',
-        () => p.render(
-          fullWidth: math.min(p.width * 1.8, 1500),
-          fullHeight: math.min(p.width * 1.8, 1500) * p.height / p.width,
-        ),
-        data: {'页码': pageIndex + 1, '文档': identityHashCode(bytes)},
-      );
-      if (image == null) throw const FormatException('无法渲染 PDF');
-      try {
-        return (
-          // 原生像素随 dispose 释放，复制到 Dart 堆后即可交还调度器。
-          pixels: Uint8List.fromList(image.pixels),
-          width: image.width,
-          height: image.height,
-          size: Size(p.width, p.height),
-          pageCount: doc.pages.length,
-          pageSizes: [
-            for (final page in doc.pages) Size(page.width, page.height),
-          ],
-        );
-      } finally {
-        image.dispose();
-      }
+    final page = await _scheduled(isNeeded: isNeeded, () async {
+      final raw = await _read(bytes, _inspectTask(pageIndex));
+      // PNG 编码还要一会儿，类型先记下，排在后面的同页识别可以直接取用。
+      (_kinds[bytes] ??= {})[pageIndex] = PdfPageKind.values[raw.kind];
+      return raw;
     });
-    // 两者同时发出：对象解析与渲染在 pdfrx 后台依次执行，中间不留往返空档。
-    // 先挂上空监听，任何一方先失败都不会变成未捕获异常；下面的 await 仍会收到错误。
-    objectsTask.ignore();
-    renderTask.ignore();
-    final objects = await objectsTask;
-    final page = await renderTask;
     final png = await PdfDiagnostics.trace(
       '页面PNG编码',
-      () => _encode(page.pixels, page.width, page.height),
+      () => _encode(
+        page.pixels.materialize().asUint8List(),
+        page.width,
+        page.height,
+      ),
       data: {'页码': pageIndex + 1, '文档': identityHashCode(bytes)},
     );
     return PdfPageSnapshot(
       png,
       page.size,
-      objects,
+      page.objects,
       page.pageCount,
       pageSizes: page.pageSizes,
+      kind: PdfPageKind.values[page.kind],
     );
+  }
+
+  /// 识别单页类型（见 [classifyPage]），供尚未预览的页面（如缩略图）使用；
+  /// 已预览的页面直接读取快照里的类型。低优先级排队，页面预览随时插到前面。
+  Future<PdfPageKind> pageKind(
+    Uint8List bytes,
+    int index, {
+    bool Function()? isNeeded,
+  }) => _scheduled(low: true, isNeeded: isNeeded, () async {
+    final known = _kinds[bytes]?[index];
+    if (known != null) return known;
+    final kind = PdfPageKind.values[await _read(bytes, _classifyTask(index))];
+    (_kinds[bytes] ??= {})[index] = kind;
+    return kind;
+  });
+
+  /// 已识别的页面类型，按字节版本记录，随版本对象一起回收。
+  final _kinds = Expando<Map<int, PdfPageKind>>('pageKinds');
+
+  /// 缩略图低优先级排队，页面预览随时插到前面。
+  Future<Uint8List> thumbnail(
+    Uint8List bytes,
+    int index, {
+    bool Function()? isNeeded,
+  }) async {
+    final raw = await _scheduled(
+      low: true,
+      isNeeded: isNeeded,
+      () => _read(bytes, _thumbnailTask(index)),
+    );
+    return _encode(
+      raw.pixels!.materialize().asUint8List(),
+      raw.width,
+      raw.height,
+    );
+  }
+
+  // 发往后台的任务必须在静态上下文中创建：实例方法里的闭包会连同 this
+  // （含缓存与 Future）一起被复制，无法跨 isolate 发送。
+
+  static _RawPage Function(native.PDFium, native.FPDF_DOCUMENT) _inspectTask(
+    int index,
+  ) =>
+      (a, pdf) => _inspectNative(a, pdf, index);
+
+  static int Function(native.PDFium, native.FPDF_DOCUMENT) _classifyTask(
+    int index,
+  ) =>
+      (a, pdf) => _withPage(a, pdf, index, (page, textPage) {
+        final objects = _pageObjects(a, page, textPage);
+        return _classify(a, page, textPage, objects).index;
+      });
+
+  static _RawBitmap Function(native.PDFium, native.FPDF_DOCUMENT)
+  _thumbnailTask(int index) =>
+      (a, pdf) => _withPage(a, pdf, index, text: false, (page, _) {
+        final pw = a.FPDF_GetPageWidthF(page), ph = a.FPDF_GetPageHeightF(page);
+        return _render(a, page, 100, (100 * ph / pw).round());
+      });
+
+  /// 加载一页（含文字层）执行 [task]，结束后关闭。
+  static T _withPage<T>(
+    native.PDFium a,
+    native.FPDF_DOCUMENT pdf,
+    int index,
+    T Function(native.FPDF_PAGE page, native.FPDF_TEXTPAGE textPage) task, {
+    bool text = true,
+  }) {
+    if (index < 0 || index >= a.FPDF_GetPageCount(pdf)) {
+      throw const FormatException('页码超出范围');
+    }
+    final page = a.FPDF_LoadPage(pdf, index);
+    if (page == ffi.nullptr) throw const FormatException('无法读取 PDF 页面');
+    // 缩略图只渲染，不需要文字层。
+    final textPage = text ? a.FPDFText_LoadPage(page) : ffi.nullptr;
+    try {
+      return task(page, textPage);
+    } finally {
+      if (textPage != ffi.nullptr) a.FPDFText_ClosePage(textPage);
+      a.FPDF_ClosePage(page);
+    }
+  }
+
+  /// 预览：对象、页面类型、位图一次完成。渲染比例与原 pdfrx 渲染一致（宽 1.8 倍、
+  /// 最多 1500 像素）；需要比对标题图片时直接从这张位图裁出标题区。
+  static _RawPage _inspectNative(
+    native.PDFium a,
+    native.FPDF_DOCUMENT pdf,
+    int index,
+  ) => _withPage(a, pdf, index, (page, textPage) {
+    final objects = _pageObjects(a, page, textPage);
+    final text = _fullText(a, textPage);
+    var kind = classifyPage(fullText: text, objects: objects);
+    // 文字层能判断的页面不取标题区，只有需要比对标题图片时才从预览位图裁出。
+    final needTitle = needsTitleImage(kind, objects);
+    final pw = a.FPDF_GetPageWidthF(page), ph = a.FPDF_GetPageHeightF(page);
+    final fullWidth = math.min(pw * 1.8, 1500.0);
+    final width = fullWidth.toInt(), height = (fullWidth * ph / pw).toInt();
+    final band = titleBandPixels(width, height);
+    final bitmap = _render(
+      a,
+      page,
+      width,
+      height,
+      band: needTitle ? band : null,
+    );
+    if (needTitle) {
+      final title = bitmap.title;
+      kind = classifyPage(
+        fullText: text,
+        objects: objects,
+        titleImageMatched:
+            title != null &&
+            matchesAcceptanceTitle(title, band.width, band.height),
+      );
+    }
+    final count = a.FPDF_GetPageCount(pdf);
+    final size = calloc<native.FS_SIZEF>();
+    final List<Size> sizes;
+    try {
+      sizes = [
+        for (var i = 0; i < count; i++)
+          a.FPDF_GetPageSizeByIndexF(pdf, i, size) == 0
+              ? Size(pw, ph)
+              : Size(size.ref.width, size.ref.height),
+      ];
+    } finally {
+      calloc.free(size);
+    }
+    return (
+      objects: objects,
+      kind: kind.index,
+      pixels: bitmap.pixels!,
+      width: bitmap.width,
+      height: bitmap.height,
+      size: Size(pw, ph),
+      pageCount: count,
+      pageSizes: sizes,
+    );
+  });
+
+  /// 渲染为 BGRA 像素（白底、含批注外观），按行从原生位图直接写入可转移缓冲，
+  /// 只复制一次。传入 [band] 时同时取出该区域的灰度图（标题比对用）；
+  /// [pixels] 为 false 时只取灰度图，不输出整块像素。
+  static _RawBitmap _render(
+    native.PDFium a,
+    native.FPDF_PAGE page,
+    int width,
+    int height, {
+    int x = 0,
+    int y = 0,
+    int? fullWidth,
+    int? fullHeight,
+    ({int x, int y, int width, int height})? band,
+    bool pixels = true,
+  }) {
+    final bitmap = a.FPDFBitmap_Create(width, height, 1);
+    if (bitmap == ffi.nullptr) throw const FormatException('预览内存不足');
+    try {
+      a.FPDFBitmap_FillRect(bitmap, 0, 0, width, height, 0xffffffff);
+      a.FPDF_RenderPageBitmap(
+        bitmap,
+        page,
+        -x,
+        -y,
+        fullWidth ?? width,
+        fullHeight ?? height,
+        0,
+        1,
+      );
+      final stride = a.FPDFBitmap_GetStride(bitmap);
+      final source = a.FPDFBitmap_GetBuffer(
+        bitmap,
+      ).cast<ffi.Uint8>().asTypedList(stride * height);
+      Uint8List? title;
+      if (band != null &&
+          band.width > 0 &&
+          band.height > 0 &&
+          band.x + band.width <= width &&
+          band.y + band.height <= height) {
+        title = bgraToGray(
+          Uint8List.sublistView(source, band.y * stride + band.x * 4),
+          band.width,
+          band.height,
+          stride: stride,
+        );
+      }
+      return (
+        pixels: !pixels
+            ? null
+            : TransferableTypedData.fromList([
+                for (var row = 0; row < height; row++)
+                  Uint8List.sublistView(
+                    source,
+                    row * stride,
+                    row * stride + width * 4,
+                  ),
+              ]),
+        width: width,
+        height: height,
+        title: title,
+      );
+    } finally {
+      a.FPDFBitmap_Destroy(bitmap);
+    }
+  }
+
+  /// 按 [classifyPage] 判断类型。需要比对标题图片时优先用 [title]（预览位图裁出的
+  /// 标题区灰度图），没有时才单独渲染标题区。
+  static PdfPageKind _classify(
+    native.PDFium a,
+    native.FPDF_PAGE page,
+    native.FPDF_TEXTPAGE textPage,
+    List<PdfEditObject> objects, {
+    Uint8List? title,
+  }) {
+    final text = _fullText(a, textPage);
+    final kind = classifyPage(fullText: text, objects: objects);
+    if (!needsTitleImage(kind, objects)) return kind;
+    return classifyPage(
+      fullText: text,
+      objects: objects,
+      titleImageMatched: _matchTitle(a, page, title),
+    );
+  }
+
+  static String _fullText(native.PDFium a, native.FPDF_TEXTPAGE textPage) {
+    if (textPage == ffi.nullptr) return '';
+    final count = a.FPDFText_CountChars(textPage);
+    if (count <= 0) return '';
+    final buffer = calloc<ffi.Uint16>(count + 1);
+    try {
+      final written = a.FPDFText_GetText(textPage, 0, count, buffer.cast());
+      return String.fromCharCodes(buffer.asTypedList(math.max(0, written - 1)));
+    } finally {
+      calloc.free(buffer);
+    }
+  }
+
+  static bool _matchTitle(
+    native.PDFium a,
+    native.FPDF_PAGE page,
+    Uint8List? title,
+  ) {
+    final pw = a.FPDF_GetPageWidthF(page), ph = a.FPDF_GetPageHeightF(page);
+    final fullWidth = math.min(pw * 1.8, 1500.0);
+    final width = fullWidth.toInt(), height = (fullWidth * ph / pw).toInt();
+    final band = titleBandPixels(width, height);
+    if (band.width <= 0 || band.height <= 0) return false;
+    final gray =
+        title ??
+        _render(
+          a,
+          page,
+          band.width,
+          band.height,
+          x: band.x,
+          y: band.y,
+          fullWidth: width,
+          fullHeight: height,
+          band: (x: 0, y: 0, width: band.width, height: band.height),
+          pixels: false,
+        ).title!;
+    return matchesAcceptanceTitle(gray, band.width, band.height);
   }
 
   /// 预览图快速编码：压缩等级 1、不做行过滤。实测 1071×1515 的扫描单据页
@@ -303,133 +610,115 @@ class PdfEditEngine {
     )),
   );
 
-  Future<List<PdfEditObject>> _inspectObjects(Uint8List bytes, int pageIndex) {
-    return _native(bytes, (a, pdf) {
-      final page = a.FPDF_LoadPage(pdf, pageIndex);
-      if (page == ffi.nullptr) throw const FormatException('无法读取 PDF 页面');
-      final textPage = a.FPDFText_LoadPage(page);
-      try {
-        final found = <PdfEditObject>[];
-        void walk(
-          native.FPDF_PAGEOBJECT? parent,
-          List<int> prefix,
-          _Matrix transform,
-          int depth,
-        ) {
-          if (depth > 16) return;
-          final count = parent == null
-              ? a.FPDFPage_CountObjects(page)
-              : a.FPDFFormObj_CountObjects(parent);
-          for (var i = 0; i < count; i++) {
-            final object = parent == null
-                ? a.FPDFPage_GetObject(page, i)
-                : a.FPDFFormObj_GetObject(parent, i);
-            final type = a.FPDFPageObj_GetType(object), path = [...prefix, i];
-            if (type == 5) {
-              walk(object, path, transform * _matrix(a, object), depth + 1);
-              continue;
-            }
-            if (type != 1 && type != 3) continue;
-            final points = calloc<ffi.Float>(4);
-            try {
-              if (a.FPDFPageObj_GetBounds(
-                    object,
-                    points,
-                    points + 1,
-                    points + 2,
-                    points + 3,
-                  ) ==
-                  0) {
-                continue;
-              }
-              final bounds = Rect.fromLTRB(
-                points[0],
-                points[1],
-                points[2],
-                points[3],
-              );
-              final corners =
-                  [
-                        bounds.topLeft,
-                        bounds.topRight,
-                        bounds.bottomLeft,
-                        bounds.bottomRight,
-                      ]
-                      .map(transform.apply)
-                      .map((p) => _toDisplay(a, page, p))
-                      .toList();
-              final display = _box(corners);
-              if (display.isEmpty) continue;
-              var text = '', fontSize = 12.0;
-              if (type == 1 && textPage != ffi.nullptr) {
-                final length = a.FPDFTextObj_GetText(
-                  object,
-                  textPage,
-                  ffi.nullptr,
-                  0,
+  /// 遍历页面（含表单 XObject 内部）的文字与图片对象，坐标归一化到显示页面。
+  static List<PdfEditObject> _pageObjects(
+    native.PDFium a,
+    native.FPDF_PAGE page,
+    native.FPDF_TEXTPAGE textPage,
+  ) {
+    final found = <PdfEditObject>[];
+    void walk(
+      native.FPDF_PAGEOBJECT? parent,
+      List<int> prefix,
+      _Matrix transform,
+      int depth,
+    ) {
+      if (depth > 16) return;
+      final count = parent == null
+          ? a.FPDFPage_CountObjects(page)
+          : a.FPDFFormObj_CountObjects(parent);
+      for (var i = 0; i < count; i++) {
+        final object = parent == null
+            ? a.FPDFPage_GetObject(page, i)
+            : a.FPDFFormObj_GetObject(parent, i);
+        final type = a.FPDFPageObj_GetType(object), path = [...prefix, i];
+        if (type == 5) {
+          walk(object, path, transform * _matrix(a, object), depth + 1);
+          continue;
+        }
+        if (type != 1 && type != 3) continue;
+        final points = calloc<ffi.Float>(4);
+        try {
+          if (a.FPDFPageObj_GetBounds(
+                object,
+                points,
+                points + 1,
+                points + 2,
+                points + 3,
+              ) ==
+              0) {
+            continue;
+          }
+          final bounds = Rect.fromLTRB(
+            points[0],
+            points[1],
+            points[2],
+            points[3],
+          );
+          final corners = [
+            bounds.topLeft,
+            bounds.topRight,
+            bounds.bottomLeft,
+            bounds.bottomRight,
+          ].map(transform.apply).map((p) => _toDisplay(a, page, p)).toList();
+          final display = _box(corners);
+          if (display.isEmpty) continue;
+          var text = '', fontSize = 12.0;
+          if (type == 1 && textPage != ffi.nullptr) {
+            final length = a.FPDFTextObj_GetText(
+              object,
+              textPage,
+              ffi.nullptr,
+              0,
+            );
+            if (length > 2) {
+              final buffer = calloc<ffi.Uint16>((length + 1) ~/ 2);
+              try {
+                a.FPDFTextObj_GetText(object, textPage, buffer.cast(), length);
+                text = String.fromCharCodes(
+                  buffer.asTypedList(length ~/ 2 - 1),
                 );
-                if (length > 2) {
-                  final buffer = calloc<ffi.Uint16>((length + 1) ~/ 2);
-                  try {
-                    a.FPDFTextObj_GetText(
-                      object,
-                      textPage,
-                      buffer.cast(),
-                      length,
-                    );
-                    text = String.fromCharCodes(
-                      buffer.asTypedList(length ~/ 2 - 1),
-                    );
-                  } finally {
-                    calloc.free(buffer);
-                  }
-                }
-                final size = calloc<ffi.Float>();
-                try {
-                  if (a.FPDFTextObj_GetFontSize(object, size) != 0) {
-                    fontSize = size.value;
-                  }
-                } finally {
-                  calloc.free(size);
-                }
+              } finally {
+                calloc.free(buffer);
               }
-              found.add(
-                PdfEditObject(
-                  List.unmodifiable(path),
-                  type == 1 ? PdfObjectKind.text : PdfObjectKind.image,
-                  display,
-                  text: text,
-                  fontSize: fontSize,
-                  basis: type == 3
-                      ? [
-                              const Offset(0, 0),
-                              const Offset(1, 0),
-                              const Offset(0, 1),
-                            ]
-                            .map(
-                              (point) => _toDisplay(
-                                a,
-                                page,
-                                (transform * _matrix(a, object)).apply(point),
-                              ),
-                            )
-                            .toList()
-                      : null,
-                ),
-              );
+            }
+            final size = calloc<ffi.Float>();
+            try {
+              if (a.FPDFTextObj_GetFontSize(object, size) != 0) {
+                fontSize = size.value;
+              }
             } finally {
-              calloc.free(points);
+              calloc.free(size);
             }
           }
+          found.add(
+            PdfEditObject(
+              List.unmodifiable(path),
+              type == 1 ? PdfObjectKind.text : PdfObjectKind.image,
+              display,
+              text: text,
+              fontSize: fontSize,
+              basis: type == 3
+                  ? [const Offset(0, 0), const Offset(1, 0), const Offset(0, 1)]
+                        .map(
+                          (point) => _toDisplay(
+                            a,
+                            page,
+                            (transform * _matrix(a, object)).apply(point),
+                          ),
+                        )
+                        .toList()
+                  : null,
+            ),
+          );
+        } finally {
+          calloc.free(points);
         }
-
-        walk(null, [], const _Matrix(), 0);
-        return found;
-      } finally {
-        if (textPage != ffi.nullptr) a.FPDFText_ClosePage(textPage);
-        a.FPDF_ClosePage(page);
       }
-    });
+    }
+
+    walk(null, [], const _Matrix(), 0);
+    return found;
   }
 
   Future<Uint8List> extractImage(
@@ -954,28 +1243,6 @@ class PdfEditEngine {
     }
   });
 
-  /// 缩略图低优先级排队，页面预览随时插到前面。
-  Future<Uint8List> thumbnail(Uint8List bytes, int index) async {
-    final raw = await _open(bytes, low: true, (doc) async {
-      final page = doc.pages[index];
-      final image = await page.render(
-        fullWidth: 100,
-        fullHeight: 100 * page.height / page.width,
-      );
-      if (image == null) throw const FormatException('缩略图加载失败');
-      try {
-        return (
-          pixels: Uint8List.fromList(image.pixels),
-          width: image.width,
-          height: image.height,
-        );
-      } finally {
-        image.dispose();
-      }
-    });
-    return _encode(raw.pixels, raw.width, raw.height);
-  }
-
   Future<Uint8List> duplicatePage(Uint8List bytes, int index) =>
       _native(bytes, (a, pdf) {
         if ((a.FPDF_GetDocPermissions(pdf) & 1024) == 0) {
@@ -1234,6 +1501,95 @@ class _NativeValue<T> {
   final T? value;
   final String? error;
   const _NativeValue(this.value, this.error);
+}
+
+/// 后台渲染结果；[title] 为标题区灰度图，只在后台内部使用，发送前置空。
+typedef _RawBitmap = ({
+  TransferableTypedData? pixels,
+  int width,
+  int height,
+  Uint8List? title,
+});
+
+/// 发回主 isolate 的预览结果，像素在可转移缓冲中，不随消息复制。
+typedef _RawPage = ({
+  List<PdfEditObject> objects,
+  int kind,
+  TransferableTypedData pixels,
+  int width,
+  int height,
+  Size size,
+  int pageCount,
+  List<Size> pageSizes,
+});
+
+/// 后台只读文档缓存，只存在于 PDFium 后台 isolate 内。
+final _readDocuments =
+    <int, ({ffi.Pointer<ffi.Uint8> data, native.FPDF_DOCUMENT pdf})>{};
+
+class _ReadValue<T> extends _NativeValue<T> {
+  final bool missing, loadFailed;
+  const _ReadValue(
+    super.value,
+    super.error, {
+    this.missing = false,
+    this.loadFailed = false,
+  });
+}
+
+_ReadValue<T> _readWorker<T>(
+  ({
+    int key,
+    Uint8List? bytes,
+    T Function(native.PDFium, native.FPDF_DOCUMENT) task,
+  })
+  message,
+) {
+  final a = native.getPdfium(modulePath: Pdfrx.pdfiumModulePath);
+  var entry = _readDocuments[message.key];
+  if (entry == null) {
+    final bytes = message.bytes;
+    if (bytes == null) return const _ReadValue(null, null, missing: true);
+    final data = calloc<ffi.Uint8>(bytes.length)
+      ..asTypedList(bytes.length).setAll(0, bytes);
+    final pdf = a.FPDF_LoadMemDocument64(
+      data.cast(),
+      bytes.length,
+      ffi.nullptr,
+    );
+    if (pdf == ffi.nullptr) {
+      calloc.free(data);
+      return const _ReadValue(null, '无法打开 PDF，文件可能损坏或需要密码', loadFailed: true);
+    }
+    entry = _readDocuments[message.key] = (data: data, pdf: pdf);
+  }
+  try {
+    final value = message.task(a, entry.pdf);
+    // 标题区灰度图只在后台使用，不随结果发回。
+    return _ReadValue(
+      value is _RawBitmap
+          ? (
+                  pixels: value.pixels,
+                  width: value.width,
+                  height: value.height,
+                  title: null,
+                )
+                as T
+          : value,
+      null,
+    );
+  } on FormatException catch (e) {
+    return _ReadValue(null, e.message);
+  }
+}
+
+void _closeReadWorker(int key) {
+  final entry = _readDocuments.remove(key);
+  if (entry == null) return;
+  native
+      .getPdfium(modulePath: Pdfrx.pdfiumModulePath)
+      .FPDF_CloseDocument(entry.pdf);
+  calloc.free(entry.data);
 }
 
 _NativeValue<T> _nativeWorker<T>(

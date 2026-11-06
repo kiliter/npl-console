@@ -25,6 +25,14 @@ const _objects = [
 ];
 
 class _Engine extends PdfEditEngine {
+  // 假引擎没有真实文字层，页面类型固定为地市协议页，避免调用原生识别。
+  @override
+  Future<PdfPageKind> pageKind(
+    Uint8List bytes,
+    int index, {
+    bool Function()? isNeeded,
+  }) async => PdfPageKind.cityAgreement;
+
   final calls = <int, int>{};
   final bases = <Uint8List>[];
   bool failExtract = false;
@@ -36,7 +44,11 @@ class _Engine extends PdfEditEngine {
   ) async => _png;
   Completer<Uint8List>? pending;
   @override
-  Future<Uint8List> thumbnail(Uint8List bytes, int index) async => _png;
+  Future<Uint8List> thumbnail(
+    Uint8List bytes,
+    int index, {
+    bool Function()? isNeeded,
+  }) async => _png;
   @override
   Future<PdfPageSnapshot> inspect(
     Uint8List bytes,
@@ -1169,4 +1181,93 @@ void main() {
     session.dispose();
     controller.dispose();
   });
+
+  test('同页预览请求合并需要判断：任一请求方仍需要就渲染，全部离开才跳过', () async {
+    final engine = _GatedEngine();
+    final session = PdfEditSession(engine: engine);
+    await session.load('NEW', Uint8List.fromList([1]));
+    engine.gate = Completer<void>();
+    final doc = session.target!;
+    var first = true, second = false;
+    final a = doc.preview(engine, 3, isNeeded: () => first);
+    final b = doc.preview(engine, 3, isNeeded: () => second);
+    expect(identical(a, b), isTrue);
+    // 首个请求方离开，后来的请求方仍需要：合并判断为需要。
+    first = false;
+    second = true;
+    expect(engine.needed!(), isTrue);
+    second = false;
+    expect(engine.needed!(), isFalse);
+    engine.gate!.complete();
+    await expectLater(a, throwsA(isA<PdfRenderSkipped>()));
+    // 跳过后的新请求重新排队并正常完成。
+    engine.gate = null;
+    expect((await doc.preview(engine, 3)).pageCount, 10);
+    session.dispose();
+  });
+
+  testWidgets('请求被跳过而组件仍在显示时只重试一次，不重复请求', (tester) async {
+    var calls = 0;
+    final first = Completer<String>();
+    Future<String> request() {
+      calls++;
+      return calls == 1 ? first.future : Future.value('完成');
+    }
+
+    await tester.pumpWidget(MaterialApp(home: _RetryProbe(request: request)));
+    // 挂起期间多帧重建都不触发重试。
+    for (var i = 0; i < 5; i++) {
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    expect(calls, 1);
+    first.completeError(const PdfRenderSkipped());
+    await tester.pump();
+    await tester.pump();
+    await tester.pumpAndSettle();
+    expect(calls, 2);
+    expect(find.text('完成'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+}
+
+/// 预览渲染卡在闸门上，记录引擎收到的合并需要判断。
+class _GatedEngine extends _Engine {
+  Completer<void>? gate;
+  bool Function()? needed;
+  @override
+  Future<PdfPageSnapshot> inspect(
+    Uint8List bytes,
+    int pageIndex, {
+    bool Function()? isNeeded,
+  }) async {
+    if (gate != null) {
+      needed = isNeeded;
+      await gate!.future;
+      if (isNeeded != null && !isNeeded()) throw const PdfRenderSkipped();
+    }
+    return super.inspect(bytes, pageIndex);
+  }
+}
+
+class _RetryProbe extends StatefulWidget {
+  final Future<String> Function() request;
+  const _RetryProbe({required this.request});
+  @override
+  State<_RetryProbe> createState() => _RetryProbeState();
+}
+
+class _RetryProbeState extends State<_RetryProbe> {
+  late Future<String> value = widget.request();
+  @override
+  Widget build(BuildContext context) => FutureBuilder<String>(
+    future: value,
+    builder: (context, snapshot) {
+      if (retryIfSkipped(this, snapshot, value, () {
+        value = widget.request();
+      })) {
+        return const Text('等待');
+      }
+      return Text(snapshot.data ?? '加载中');
+    },
+  );
 }
