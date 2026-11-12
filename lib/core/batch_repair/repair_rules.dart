@@ -494,8 +494,9 @@ List<RepairItem> analyzeRepair(
             placements: [for (final i in unique) place(h, matched, i, page)],
           ),
         );
+        break; // 从新到旧取第一份能补出签字的历史单据
       }
-      break; // 只和最近一份能对上的历史单据比较
+      // 这份历史协议页与最新页一致（也可能同样缺签字），继续和更早的历史单据比较
     }
   }
   int order(RepairItem i) => int.parse(i.id.substring(1));
